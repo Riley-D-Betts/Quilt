@@ -266,7 +266,11 @@ function PatternDef({ fabric, idPrefix }: { fabric: Fabric; idPrefix: string }) 
       </pattern>
     );
   }
-  const tile = renderPatternTile(fabric.pattern, fabric.color, contrastOverlay(fabric.color));
+  const tile = renderPatternTile(
+    fabric.pattern,
+    fabric.color,
+    fabric.color2 ?? contrastOverlay(fabric.color),
+  );
   if (!tile) {
     // Unknown or solid pattern id: a plain color tile keeps url(#...) fills valid.
     return (
@@ -331,6 +335,11 @@ export function FabricSwatch({
 export function contrastOverlay(hexColor: string): string {
   const luminance = relativeLuminance(hexColor);
   return luminance > 0.45 ? 'rgba(50, 35, 25, 0.35)' : 'rgba(255, 252, 245, 0.6)';
+}
+
+/** A sensible starting point when the user switches Pattern color off Auto. */
+export function defaultColor2(hexColor: string): string {
+  return relativeLuminance(hexColor) > 0.45 ? '#3c2a21' : '#fffcf5';
 }
 
 function relativeLuminance(hex: string): number {

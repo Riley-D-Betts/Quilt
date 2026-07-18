@@ -531,6 +531,25 @@ describe('validateFabricFields (library fabrics)', () => {
       validateFabricFields({ name: 'X', color: '#aabbcc', pattern: 'solid', image: 'nope' }),
     ).toThrow(/photo/);
   });
+
+  it('accepts and normalizes an optional secondary pattern color', () => {
+    const f = validateFabricFields({ name: 'X', color: '#aabbcc', color2: '#FF0011', pattern: 'dots' });
+    expect(f.color2).toBe('#ff0011');
+    expect(
+      validateFabricFields({ name: 'X', color: '#aabbcc', pattern: 'dots' }).color2,
+    ).toBeUndefined();
+    expect(() =>
+      validateFabricFields({ name: 'X', color: '#aabbcc', color2: 'pink', pattern: 'dots' }),
+    ).toThrow(/pattern color/);
+  });
+
+  it('round-trips color2 through quilt validation', () => {
+    const q = makeQuilt({
+      fabrics: [{ id: 'red', name: 'Red', color: '#aa0000', color2: '#ffffff', pattern: 'gingham' }],
+      cells: ['red', null, null, null],
+    });
+    expect(validateQuiltData(q).fabrics[0].color2).toBe('#ffffff');
+  });
 });
 
 describe('pattern catalog', () => {

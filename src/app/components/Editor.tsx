@@ -18,7 +18,7 @@ import {
   type SplitKind,
 } from '../../shared/quilt';
 import { gridCount, splitPartCount } from '../../shared/geometry';
-import { FabricSwatch, QuiltSvg } from './QuiltSvg';
+import { defaultColor2, FabricSwatch, QuiltSvg } from './QuiltSvg';
 import { TotalsPanel } from './TotalsPanel';
 import { DrawDialog } from './DrawDialog';
 import { LibraryDialog } from './LibraryDialog';
@@ -978,6 +978,8 @@ function FabricDialog({
     fabric?.color ?? NEW_FABRIC_COLORS[Math.floor(Math.random() * NEW_FABRIC_COLORS.length)],
   );
   const [pattern, setPattern] = useState<PatternId>(fabric?.pattern ?? 'solid');
+  /** Secondary (motif) color; null = automatic contrast tone. */
+  const [color2, setColor2] = useState<string | null>(fabric?.color2 ?? null);
   const [image, setImage] = useState<string | null>(fabric?.image ?? null);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
@@ -993,7 +995,7 @@ function FabricDialog({
   useEffect(() => {
     setLibState((s) => (s === 'saved' ? 'idle' : s));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name, color, pattern, image]);
+  }, [name, color, color2, pattern, image]);
 
   async function saveToLibrary() {
     if (photoBusy || libState === 'saving') return;
@@ -1003,6 +1005,7 @@ function FabricDialog({
       await api.saveLibraryFabric({
         name: name.trim() || 'Unnamed fabric',
         color,
+        ...(color2 ? { color2 } : {}),
         pattern,
         ...(image ? { image } : {}),
       });
@@ -1039,6 +1042,7 @@ function FabricDialog({
       id: fabric?.id ?? `f-${crypto.randomUUID().slice(0, 8)}`,
       name: name.trim() || 'Unnamed fabric',
       color,
+      ...(color2 ? { color2 } : {}),
       pattern,
       ...(image ? { image } : {}),
     });
@@ -1175,8 +1179,27 @@ function FabricDialog({
                 Color
                 <input type="color" value={color} onChange={(e) => setColor(e.target.value)} />
               </label>
+              <div className="color2-field">
+                <span className="photo-label">Pattern color</span>
+                <label className="auto-toggle">
+                  <input
+                    type="checkbox"
+                    checked={color2 === null}
+                    onChange={(e) => setColor2(e.target.checked ? null : defaultColor2(color))}
+                  />
+                  Auto
+                </label>
+                {color2 !== null && (
+                  <input
+                    type="color"
+                    value={color2}
+                    onChange={(e) => setColor2(e.target.value)}
+                    aria-label="Pattern color"
+                  />
+                )}
+              </div>
               <MyColors color={color} onPick={setColor} />
-              <PatternPicker color={color} value={pattern} onChange={setPattern} />
+              <PatternPicker color={color} color2={color2} value={pattern} onChange={setPattern} />
             </>
           )}
           <div className="library-save-row">
