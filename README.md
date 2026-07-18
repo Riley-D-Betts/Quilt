@@ -57,9 +57,27 @@ npm run db:migrate:remote
 npm run deploy
 ```
 
-Wrangler prints your URL, e.g. `https://quilt-planner.<your-subdomain>.workers.dev`.
-Open it, create an account, and start quilting. Deploying again later is just
-`npm run deploy`.
+The app deploys to **https://quilt.rileybetts.xyz** (plus a fallback
+`https://quilt-planner.<your-subdomain>.workers.dev` URL). Open it, create an
+account, and start quilting. Deploying again later is just `npm run deploy`.
+
+### Your own domain
+
+`wrangler.jsonc` routes the Worker to `quilt.rileybetts.xyz` as a
+[custom domain](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/)
+(free on every plan). One-time setup before the first deploy:
+
+1. In the [Cloudflare dashboard](https://dash.cloudflare.com), **Add a domain**
+   → `rileybetts.xyz` → pick the **Free** plan.
+2. At your domain registrar, change the domain's nameservers to the two
+   Cloudflare gives you (takes minutes to a few hours to propagate).
+3. Run `npm run deploy`. Cloudflare creates the `quilt` DNS record and TLS
+   certificate automatically — nothing else to configure.
+
+If the domain isn't in your Cloudflare account yet, the deploy fails with a
+"zone not found" error — finish steps 1–2 first, or temporarily delete the
+`routes` block from `wrangler.jsonc` to deploy on the `workers.dev` URL only.
+To serve a different subdomain later, just edit the `pattern` and redeploy.
 
 ### Free-tier headroom
 

@@ -6,6 +6,16 @@
   "main": "src/worker/index.ts",
   "compatibility_date": "2025-06-01",
 
+  // Serve the app at the custom domain. Requires the rileybetts.xyz zone to
+  // exist in your Cloudflare account first (see README "Your own domain");
+  // deploying then creates the DNS record and TLS certificate automatically.
+  "routes": [
+    {
+      "pattern": "quilt.rileybetts.xyz",
+      "custom_domain": true
+    }
+  ],
+
   // The built React app. `run_worker_first` makes /api/* hit the Worker even
   // though `single-page-application` would otherwise answer with index.html.
   "assets": {
