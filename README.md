@@ -83,6 +83,10 @@ To serve a different subdomain later, just edit the `pattern` and redeploy.
 
 - **Workers**: 100,000 requests/day — a family of quilters won't dent this.
 - **D1**: 5 GB storage, 5 million reads/day. A quilt design is a few KB.
+- Password hashing is tuned (PBKDF2, 50k iterations) to fit the free plan's
+  10ms CPU budget. If you ever move to the $5/mo Workers Paid plan, you can
+  raise `PBKDF2_ITERATIONS` in `src/worker/auth.ts` — existing accounts keep
+  working, since each hash records its own iteration count.
 
 ### Closing the front door
 

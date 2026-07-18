@@ -64,7 +64,7 @@ app.post('/api/auth/register', async (c) => {
   }
 
   const token = await createSession(c.env.DB, userId);
-  c.header('Set-Cookie', sessionCookie(token));
+  c.header('Set-Cookie', sessionCookie(token, isHttps(c.req.url)));
   return c.json({ email }, 201);
 });
 
@@ -88,14 +88,14 @@ app.post('/api/auth/login', async (c) => {
   if (!(await verifyPassword(password, user.password_hash))) return invalid();
 
   const token = await createSession(c.env.DB, user.id);
-  c.header('Set-Cookie', sessionCookie(token));
+  c.header('Set-Cookie', sessionCookie(token, isHttps(c.req.url)));
   return c.json({ email: user.email });
 });
 
 app.post('/api/auth/logout', async (c) => {
   const token = getCookie(c, SESSION_COOKIE);
   if (token) await deleteSession(c.env.DB, token);
-  c.header('Set-Cookie', clearSessionCookie());
+  c.header('Set-Cookie', clearSessionCookie(isHttps(c.req.url)));
   return c.json({ ok: true });
 });
 
@@ -106,9 +106,11 @@ app.post('/api/auth/logout', async (c) => {
 app.use('/api/*', async (c, next) => {
   // Everything below this middleware requires a session.
   const token = getCookie(c, SESSION_COOKIE) ?? '';
-  const user = await getSessionUser(c.env.DB, token);
-  if (!user) return c.json({ error: 'Not signed in.' }, 401);
-  c.set('user', user);
+  const session = await getSessionUser(c.env.DB, token);
+  if (!session) return c.json({ error: 'Not signed in.' }, 401);
+  c.set('user', session.user);
+  // Slide the browser cookie along with the database expiry.
+  if (session.refreshed) c.header('Set-Cookie', sessionCookie(token, isHttps(c.req.url)));
   await next();
 });
 
@@ -252,6 +254,10 @@ async function readJson(req: Request): Promise<any> {
   }
 }
 
+function isHttps(url: string): boolean {
+  return new URL(url).protocol === 'https:';
+}
+
 function normalizeEmail(v: unknown): string | null {
   if (typeof v !== 'string') return null;
   const email = v.trim().toLowerCase();
@@ -270,7 +276,7 @@ function validationResponse(c: any, err: unknown) {
   throw err;
 }
 
-/** A real hash of a random unknowable password, used to equalize login timing. */
+/** A hash of a random unknowable password, used to equalize login timing. */
 const DUMMY_HASH =
-  'pbkdf2$100000$5f1d0e6a3b8c49d2a7e4f0b1c6d8e9f0$' +
+  'pbkdf2$50000$5f1d0e6a3b8c49d2a7e4f0b1c6d8e9f0$' +
   '9c1c01dc3ac1445a500251fc34a15d3e75a849df8eaad55aa4406fcbea75e240';
