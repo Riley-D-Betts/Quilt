@@ -13,7 +13,7 @@ import {
   PATTERNS,
   type QuiltData,
 } from '../src/shared/quilt';
-import { buildGrid, hitTest, splitPartHit } from '../src/shared/geometry';
+import { buildGrid, gridCount, hitTest, offsetPolygonBBox, splitPartHit } from '../src/shared/geometry';
 
 function makeQuilt(overrides: Partial<QuiltData> = {}): QuiltData {
   const base: QuiltData = {
@@ -98,6 +98,30 @@ describe('shape grids', () => {
     expect(g.cells[0].areaSqIn).toBeCloseTo(Math.PI * 9, 6);
   });
 
+  it('gridCount matches the materialized grid for every shape and size', () => {
+    for (const cellShape of ['square', 'triangle', 'hexagon', 'octagon', 'circle', 'pentagon', 'heptagon'] as const) {
+      for (const [w, h, cw] of [
+        [60, 72, 6],
+        [8, 40, 8],
+        [45, 45, 3.5],
+        [4, 4, 60],
+      ]) {
+        const input = { widthIn: w, heightIn: h, cellWidthIn: cw, cellHeightIn: cw, cellShape };
+        expect(gridCount(input), `${cellShape} ${w}x${h}/${cw}`).toBe(buildGrid(input).count);
+      }
+    }
+  });
+
+  it('hexagon grids with a single column keep every hex inside the quilt', () => {
+    const g = buildGrid({ widthIn: 8, heightIn: 40, cellWidthIn: 8, cellHeightIn: 8, cellShape: 'hexagon' });
+    expect(g.cols).toBe(1);
+    for (const cell of g.cells) {
+      expect(cell.cx + 4).toBeLessThanOrEqual(g.widthIn + 1e-6);
+      expect(cell.cx - 4).toBeGreaterThanOrEqual(-1e-6);
+    }
+    expect(g.rowLengths.every((len, i) => len === (i % 2 === 0 ? 1 : 0))).toBe(true);
+  });
+
   it('hit-testing finds the cell whose centroid you click, for every shape', () => {
     for (const cellShape of ['square', 'triangle', 'hexagon', 'octagon', 'circle', 'pentagon', 'heptagon'] as const) {
       const input = { ...base, cellShape };
@@ -149,6 +173,61 @@ describe('split cells', () => {
     expect(report.totalCells).toBe(8); // 2 + 4 + 1 + 1 pieces
   });
 
+  it('diagonal pieces get true seam allowance: the HST 7/8-inch rule', () => {
+    // A 6" finished half-square triangle with 1/4" seams needs ~6.85" —
+    // NOT 6.5" (bbox + 2*seam). Quilters round this to "finished + 7/8".
+    const q = makeQuilt({
+      cells: [{ split: 'd2', parts: ['red', 'red'] }, null, null, null],
+    });
+    const red = fabricTotals(q).totals.find((t) => t.fabric.id === 'red')!;
+    expect(red.groups).toHaveLength(1);
+    expect(red.groups[0].count).toBe(2);
+    expect(red.groups[0].cutWIn).toBeCloseTo(6.85, 2);
+    expect(red.groups[0].cutHIn).toBeCloseTo(6.85, 2);
+  });
+
+  it('quarter-square (x4) pieces follow the QST rule', () => {
+    const q = makeQuilt({
+      cells: [{ split: 'x4', parts: ['red', null, null, null] }, null, null, null],
+    });
+    const red = fabricTotals(q).totals.find((t) => t.fabric.id === 'red')!;
+    expect(red.groups[0].cutWIn).toBeCloseTo(7.21, 2);
+    expect(red.groups[0].cutHIn).toBeCloseTo(3.6, 2);
+  });
+
+  it('equilateral triangle pieces get bisector-correct cut sizes', () => {
+    const q = makeQuilt({ cellShape: 'triangle', cells: [] });
+    const grid = buildGrid({ ...q, cellShape: 'triangle' });
+    const cells = new Array(grid.count).fill(null);
+    cells[0] = 'red';
+    const red = fabricTotals({ ...q, cells }).totals.find((t) => t.fabric.id === 'red')!;
+    expect(red.groups[0].cutWIn).toBeCloseTo(6.87, 2);
+    expect(red.groups[0].cutHIn).toBeCloseTo(5.95, 2);
+  });
+
+  it('octagon corner squares are listed at their straight-grain cut size', () => {
+    const q = makeQuilt({ widthIn: 60, heightIn: 72, cellShape: 'octagon', cells: [] });
+    const grid = buildGrid({ ...q, cellShape: 'octagon' });
+    const cells = new Array(grid.count).fill(null);
+    cells[grid.rows * grid.cols] = 'red'; // first corner filler
+    const red = fabricTotals({ ...q, cells }).totals.find((t) => t.fabric.id === 'red')!;
+    // side a = 6/(1+sqrt2) ~ 2.49; cut = a + 2*0.25 ~ 2.99 (NOT the 4.01 on-point bbox)
+    expect(red.groups[0].cutWIn).toBeCloseTo(2.99, 2);
+    expect(red.groups[0].cutHIn).toBeCloseTo(2.99, 2);
+  });
+
+  it('offsetPolygonBBox equals bbox+2s for axis-aligned rectangles', () => {
+    const rect: [number, number][] = [
+      [0, 0],
+      [6, 0],
+      [6, 3],
+      [0, 3],
+    ];
+    const box = offsetPolygonBBox(rect, 0.25);
+    expect(box.w).toBeCloseTo(6.5, 6);
+    expect(box.h).toBeCloseTo(3.5, 6);
+  });
+
   it('validation rejects splits off square grids and wrong part counts', () => {
     expect(() =>
       validateQuiltData(
@@ -195,6 +274,24 @@ describe('stamp shapes and background fabric', () => {
     expect(blue.pieceCount).toBe(1); // one background panel
     expect(report.backgroundSqFt).toBeCloseTo((144 - 4 * Math.PI * 9) / 144, 2);
     expect(report.backgroundAssigned).toBe(true);
+  });
+
+  it('pieces the background from bolt widths on quilts wider than the bolt', () => {
+    const q = makeQuilt({
+      widthIn: 60,
+      heightIn: 72,
+      cellShape: 'circle',
+      backgroundFabricId: 'blue',
+      cells: [],
+    });
+    const grid = buildGrid({ ...q, cellShape: 'circle' });
+    const report = fabricTotals({ ...q, cells: new Array(grid.count).fill(null) });
+    const blue = report.totals.find((t) => t.fabric.id === 'blue')!;
+    // 60.5" panel width -> two 42"-wide lengths of 72.5"
+    expect(blue.pieceCount).toBe(2);
+    expect(blue.groups).toEqual([{ cutWIn: 42, cutHIn: 72.5, count: 2 }]);
+    // and crucially the yardage is a number, not a dash: 145" -> 4 1/8 yd
+    expect(blue.yards).toBe(4.125);
   });
 
   it('warns when no background fabric is chosen', () => {

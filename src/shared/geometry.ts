@@ -38,9 +38,15 @@ export interface CellGeom {
   /** Circle radius; only for the circle shape. */
   r?: number;
   areaSqIn: number;
-  /** Cut-piece bounding box (before seam allowance). */
+  /** As-placed bounding box (used for rendering/hit math, not cutting). */
   cutWIn: number;
   cutHIn: number;
+  /**
+   * Polygon in its CUTTING orientation when that differs from placement —
+   * e.g. octagon corner squares are cut straight-grain and set on point.
+   * Cut-size math uses this (falling back to `points`).
+   */
+  cutPoints?: [number, number][];
 }
 
 export interface GridGeom {
@@ -268,7 +274,9 @@ function buildHexagon(d: GridInput): GridGeom {
   const rowLengths: number[] = [];
   for (let r = 0; r < rows; r++) {
     const offset = r % 2 === 1;
-    const inRow = offset ? Math.max(1, cols - 1) : cols;
+    // Offset rows are one hex shorter; with a single column they are empty
+    // (a half-offset hex would hang outside the quilt).
+    const inRow = offset ? Math.max(0, cols - 1) : cols;
     rowLengths.push(inRow);
     for (let c = 0; c < inRow; c++) {
       const cx = c * w + w / 2 + (offset ? w / 2 : 0);
@@ -342,7 +350,14 @@ function buildOctagon(d: GridInput): GridGeom {
     }
   }
   // Corner filler squares (rotated 45°) between each 2x2 group of octagons.
+  // They are CUT as straight squares of side a, then set on point.
   const half = a / Math.SQRT2;
+  const straightSquare: [number, number][] = [
+    [0, 0],
+    [a, 0],
+    [a, a],
+    [0, a],
+  ];
   for (let r = 1; r < rows; r++) {
     rowLengths.push(Math.max(0, cols - 1));
     for (let c = 1; c < cols; c++) {
@@ -361,6 +376,7 @@ function buildOctagon(d: GridInput): GridGeom {
         areaSqIn: a * a,
         cutWIn: a * Math.SQRT2,
         cutHIn: a * Math.SQRT2,
+        cutPoints: straightSquare,
       });
     }
   }
@@ -449,6 +465,122 @@ export function hitTest(g: GridGeom, x: number, y: number, d: GridInput): number
         }
       }
       return octIdx;
+    }
+  }
+}
+
+/**
+ * Bounding box of a convex polygon offset OUTWARD by `offset` on every side
+ * (the true cut piece with seam allowance). For diagonal edges this is
+ * larger than bbox+2*offset — the reason quilters add 7/8" for half-square
+ * triangles rather than 1/2".
+ */
+export function offsetPolygonBBox(
+  pts: [number, number][],
+  offset: number,
+): { w: number; h: number } {
+  const n = pts.length;
+  if (offset <= 0 || n < 3) {
+    let minX = Infinity,
+      maxX = -Infinity,
+      minY = Infinity,
+      maxY = -Infinity;
+    for (const [x, y] of pts) {
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+    }
+    return { w: maxX - minX, h: maxY - minY };
+  }
+  let cx = 0,
+    cy = 0;
+  for (const [x, y] of pts) {
+    cx += x / n;
+    cy += y / n;
+  }
+  // Each edge, shifted outward by `offset` along its outward normal.
+  const lines = pts.map((p, i) => {
+    const q = pts[(i + 1) % n];
+    let dx = q[0] - p[0];
+    let dy = q[1] - p[1];
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len;
+    dy /= len;
+    let nx = dy;
+    let ny = -dx;
+    // Point the normal away from the centroid.
+    const mx = (p[0] + q[0]) / 2 - cx;
+    const my = (p[1] + q[1]) / 2 - cy;
+    if (nx * mx + ny * my < 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+    return { px: p[0] + nx * offset, py: p[1] + ny * offset, dx, dy };
+  });
+  // Offset vertices are the intersections of adjacent offset edges.
+  let minX = Infinity,
+    maxX = -Infinity,
+    minY = Infinity,
+    maxY = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const a = lines[(i + n - 1) % n];
+    const b = lines[i];
+    const cross = a.dx * b.dy - a.dy * b.dx;
+    let vx: number;
+    let vy: number;
+    if (Math.abs(cross) < 1e-9) {
+      vx = b.px;
+      vy = b.py;
+    } else {
+      const t = ((b.px - a.px) * b.dy - (b.py - a.py) * b.dx) / cross;
+      vx = a.px + t * a.dx;
+      vy = a.py + t * a.dy;
+    }
+    minX = Math.min(minX, vx);
+    maxX = Math.max(maxX, vx);
+    minY = Math.min(minY, vy);
+    maxY = Math.max(maxY, vy);
+  }
+  return { w: maxX - minX, h: maxY - minY };
+}
+
+/**
+ * Cell count for a grid WITHOUT materializing it — cheap enough to guard
+ * huge inputs before buildGrid allocates hundreds of thousands of polygons.
+ */
+export function gridCount(d: GridInput): number {
+  switch (d.cellShape) {
+    case 'square':
+    case 'circle':
+    case 'pentagon':
+    case 'heptagon': {
+      const cols = Math.max(1, Math.round(d.widthIn / d.cellWidthIn));
+      const rows = Math.max(1, Math.round(d.heightIn / d.cellHeightIn));
+      return rows * cols;
+    }
+    case 'triangle': {
+      const s = d.cellWidthIn;
+      const h = (s * SQRT3) / 2;
+      const cols = Math.max(1, Math.round(d.widthIn / s));
+      const rows = Math.max(1, Math.round(d.heightIn / h));
+      return rows * (2 * cols - 1);
+    }
+    case 'hexagon': {
+      const w = d.cellWidthIn;
+      const hexH = (2 * w) / SQRT3;
+      const pitch = (3 * hexH) / 4;
+      const cols = Math.max(1, Math.round(d.widthIn / w));
+      const rows = Math.max(1, Math.round((d.heightIn - hexH / 4) / pitch));
+      const fullRows = Math.ceil(rows / 2);
+      const offsetRows = Math.floor(rows / 2);
+      return fullRows * cols + offsetRows * Math.max(0, cols - 1);
+    }
+    case 'octagon': {
+      const w = d.cellWidthIn;
+      const cols = Math.max(1, Math.round(d.widthIn / w));
+      const rows = Math.max(1, Math.round(d.heightIn / w));
+      return rows * cols + (rows - 1) * (cols - 1);
     }
   }
 }
