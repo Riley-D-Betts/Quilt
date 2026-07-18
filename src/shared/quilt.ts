@@ -24,6 +24,12 @@ export interface Fabric {
   /** Base color as #rrggbb */
   color: string;
   pattern: PatternId;
+  /**
+   * Optional photo of the real fabric as a small data URL (JPEG/PNG/WebP),
+   * produced client-side by processFabricPhoto. When set, cells render the
+   * photo instead of color+pattern.
+   */
+  image?: string;
 }
 
 export interface QuiltData {
@@ -66,6 +72,10 @@ export const LIMITS = {
   maxNameLen: 80,
   maxFabricNameLen: 40,
   maxSeamIn: 2,
+  /** Per-fabric photo budget (data-URL characters; ~110KB of JPEG). */
+  maxImageChars: 150_000,
+  /** Whole-quilt JSON budget, kept well under D1's per-value limits. */
+  maxDataBytes: 900_000,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -301,7 +311,17 @@ export function validateQuiltData(raw: unknown): QuiltData {
     if (typeof pattern !== 'string' || !(PATTERNS as readonly string[]).includes(pattern)) {
       throw new ValidationError(`Fabric "${name}" has an unknown pattern.`);
     }
-    return { id, name, color: color.toLowerCase(), pattern: pattern as PatternId };
+    const fabric: Fabric = { id, name, color: color.toLowerCase(), pattern: pattern as PatternId };
+    if (fo.image !== undefined && fo.image !== null) {
+      if (typeof fo.image !== 'string' || !isFabricImage(fo.image)) {
+        throw new ValidationError(`Fabric "${name}" has an invalid photo.`);
+      }
+      if (fo.image.length > LIMITS.maxImageChars) {
+        throw new ValidationError(`Fabric "${name}"'s photo is too large.`);
+      }
+      fabric.image = fo.image;
+    }
+    return fabric;
   });
 
   if (!Array.isArray(o.cells)) throw new ValidationError('cells must be an array.');
@@ -322,6 +342,11 @@ export function validateQuiltData(raw: unknown): QuiltData {
 }
 
 export class ValidationError extends Error {}
+
+/** A base64 data URL in one of the formats processFabricPhoto can emit. */
+export function isFabricImage(s: string): boolean {
+  return /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/.test(s);
+}
 
 function num(v: unknown, field: string, min: number, max: number): number {
   if (typeof v !== 'number' || !Number.isFinite(v)) {

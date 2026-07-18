@@ -678,6 +678,47 @@ h2 {
   pointer-events: none;
 }
 
+.photo-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.7rem 0.8rem;
+}
+
+.photo-label {
+  font-size: 0.85rem;
+}
+
+.visually-hidden-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.photo-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.photo-preview {
+  width: 84px;
+  height: 84px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+}
+
+.photo-preview-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
 .dialog-actions {
   display: flex;
   align-items: center;
