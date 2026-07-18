@@ -135,11 +135,13 @@ app.post('/api/quilts', async (c) => {
   } catch (err) {
     return validationResponse(c, err);
   }
+  const dataJson = JSON.stringify(data);
+  if (dataJson.length > LIMITS.maxDataBytes) return dataTooLarge(c);
   const id = crypto.randomUUID();
   await c.env.DB.prepare(
     'INSERT INTO quilts (id, user_id, name, data) VALUES (?, ?, ?, ?)',
   )
-    .bind(id, c.get('user').id, name, JSON.stringify(data))
+    .bind(id, c.get('user').id, name, dataJson)
     .run();
   const row = await getQuiltRow(c.env.DB, c.get('user').id, id);
   return c.json({ quilt: rowToQuilt(row!) }, 201);
@@ -169,6 +171,7 @@ app.put('/api/quilts/:id', async (c) => {
     } catch (err) {
       return validationResponse(c, err);
     }
+    if (dataJson.length > LIMITS.maxDataBytes) return dataTooLarge(c);
   }
   await c.env.DB.prepare(
     `UPDATE quilts SET
@@ -274,6 +277,13 @@ function cleanName(v: unknown): string | null {
 function validationResponse(c: any, err: unknown) {
   if (err instanceof ValidationError) return c.json({ error: err.message }, 400);
   throw err;
+}
+
+function dataTooLarge(c: any) {
+  return c.json(
+    { error: 'This quilt is too large to save — try removing some fabric photos.' },
+    400,
+  );
 }
 
 /** A hash of a random unknowable password, used to equalize login timing. */

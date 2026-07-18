@@ -86,7 +86,7 @@ export const QuiltSvg = memo(function QuiltSvg({
     >
       <defs>
         {data.fabrics
-          .filter((f) => f.pattern !== 'solid')
+          .filter((f) => f.image || f.pattern !== 'solid')
           .map((f) => (
             <PatternDef key={f.id} fabric={f} idPrefix={idPrefix} />
           ))}
@@ -107,7 +107,7 @@ export const QuiltSvg = memo(function QuiltSvg({
         const col = i % dims.cols;
         const fabric = fabricId ? fabricById.get(fabricId) : undefined;
         const fill = fabric
-          ? fabric.pattern === 'solid'
+          ? !fabric.image && fabric.pattern === 'solid'
             ? fabric.color
             : `url(#${idPrefix}-f-${fabric.id})`
           : `url(#${idPrefix}-unassigned)`;
@@ -140,9 +140,23 @@ export const QuiltSvg = memo(function QuiltSvg({
 /**
  * One tile-able motif per pattern id, drawn in a contrast color derived
  * from the fabric's base color so light and dark fabrics both read well.
+ * Fabrics with a photo instead cover each shape with the photo.
  */
 function PatternDef({ fabric, idPrefix }: { fabric: Fabric; idPrefix: string }) {
   const id = `${idPrefix}-f-${fabric.id}`;
+  if (fabric.image) {
+    // objectBoundingBox: the photo covers each cell (or swatch) it fills.
+    return (
+      <pattern id={id} width={1} height={1} patternContentUnits="objectBoundingBox">
+        <image
+          href={fabric.image}
+          width={1}
+          height={1}
+          preserveAspectRatio="xMidYMid slice"
+        />
+      </pattern>
+    );
+  }
   const accent = contrastOverlay(fabric.color);
   const t = 14; // tile size in viewBox units
 
@@ -237,12 +251,16 @@ export function FabricSwatch({
       className="fabric-swatch"
       aria-hidden="true"
     >
-      {fabric.pattern !== 'solid' && <defs>{<PatternDef fabric={fabric} idPrefix={idPrefix} />}</defs>}
+      {(fabric.image || fabric.pattern !== 'solid') && (
+        <defs>
+          <PatternDef fabric={fabric} idPrefix={idPrefix} />
+        </defs>
+      )}
       <rect
         width={28}
         height={28}
         rx={5}
-        fill={fabric.pattern === 'solid' ? fabric.color : `url(#${patternId})`}
+        fill={!fabric.image && fabric.pattern === 'solid' ? fabric.color : `url(#${patternId})`}
         stroke="rgba(60, 42, 33, 0.35)"
       />
     </svg>

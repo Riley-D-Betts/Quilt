@@ -153,6 +153,44 @@ describe('validateQuiltData', () => {
     ).toThrow(/pattern/);
   });
 
+  it('accepts a fabric photo as a small data URL and rejects junk', () => {
+    const image = 'data:image/jpeg;base64,' + 'A'.repeat(400);
+    const good = validateQuiltData(
+      makeQuilt({
+        fabrics: [{ id: 'red', name: 'Red', color: '#aa0000', pattern: 'solid', image }],
+        cells: ['red', null, null, null],
+      }),
+    );
+    expect(good.fabrics[0].image).toBe(image);
+
+    for (const bad of [
+      'https://example.com/fabric.jpg',
+      'data:text/html;base64,QUFB',
+      'data:image/jpeg;base64,not*base64!',
+    ]) {
+      expect(() =>
+        validateQuiltData(
+          makeQuilt({
+            fabrics: [{ id: 'red', name: 'Red', color: '#aa0000', pattern: 'solid', image: bad }],
+            cells: [null, null, null, null],
+          }),
+        ),
+      ).toThrow(/photo/);
+    }
+  });
+
+  it('rejects an oversized fabric photo', () => {
+    const huge = 'data:image/jpeg;base64,' + 'A'.repeat(200_000);
+    expect(() =>
+      validateQuiltData(
+        makeQuilt({
+          fabrics: [{ id: 'red', name: 'Red', color: '#aa0000', pattern: 'solid', image: huge }],
+          cells: [null, null, null, null],
+        }),
+      ),
+    ).toThrow(/too large/);
+  });
+
   it('rejects duplicate fabric ids', () => {
     expect(() =>
       validateQuiltData(

@@ -14,6 +14,7 @@ import {
 } from '../../shared/quilt';
 import { FabricSwatch, QuiltSvg } from './QuiltSvg';
 import { TotalsPanel } from './TotalsPanel';
+import { processFabricPhoto } from '../photo';
 
 type SaveState = 'saved' | 'dirty' | 'saving' | 'error';
 type Tool = 'paint' | 'erase';
@@ -671,6 +672,10 @@ function FabricDialog({
     fabric?.color ?? NEW_FABRIC_COLORS[Math.floor(Math.random() * NEW_FABRIC_COLORS.length)],
   );
   const [pattern, setPattern] = useState<PatternId>(fabric?.pattern ?? 'solid');
+  const [image, setImage] = useState<string | null>(fabric?.image ?? null);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const photoInput = useRef<HTMLInputElement>(null);
   // Only dismiss when the press STARTED on the backdrop, so a drag that
   // begins inside the dialog (e.g. selecting text) can't close it.
   const pressStartedOnBackdrop = useRef(false);
@@ -680,7 +685,23 @@ function FabricDialog({
     name: name || 'New fabric',
     color,
     pattern,
+    ...(image ? { image } : {}),
   };
+
+  async function handlePhotoFile(file: File | undefined) {
+    if (!file) return;
+    setPhotoBusy(true);
+    setPhotoError(null);
+    try {
+      setImage(await processFabricPhoto(file));
+    } catch {
+      setPhotoError("That photo couldn't be used — try taking it again.");
+    } finally {
+      setPhotoBusy(false);
+      // Allow re-selecting the same file
+      if (photoInput.current) photoInput.current.value = '';
+    }
+  }
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -689,6 +710,7 @@ function FabricDialog({
       name: name.trim() || 'Unnamed fabric',
       color,
       pattern,
+      ...(image ? { image } : {}),
     });
   }
 
@@ -721,26 +743,87 @@ function FabricDialog({
               autoFocus
             />
           </label>
-          <label>
-            Color
-            <input type="color" value={color} onChange={(e) => setColor(e.target.value)} />
-          </label>
-          <fieldset className="pattern-picker">
-            <legend>Pattern</legend>
-            {PATTERNS.map((p) => (
-              <label key={p} className={`pattern-option ${pattern === p ? 'selected' : ''}`}>
-                <input
-                  type="radio"
-                  name="pattern"
-                  value={p}
-                  checked={pattern === p}
-                  onChange={() => setPattern(p)}
-                />
-                <FabricSwatch fabric={{ ...preview, id: `pv-${p}`, pattern: p }} idPrefix="dlg" size={34} />
-                <span>{p}</span>
+          <div className="photo-section">
+            <span className="photo-label">Photo of your fabric</span>
+            <input
+              ref={photoInput}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="visually-hidden-input"
+              onChange={(e) => handlePhotoFile(e.target.files?.[0])}
+            />
+            {image ? (
+              <div className="photo-preview-row">
+                <img src={image} alt="Your fabric" className="photo-preview" />
+                <div className="photo-preview-actions">
+                  <button
+                    type="button"
+                    className="btn btn-small"
+                    onClick={() => photoInput.current?.click()}
+                    disabled={photoBusy}
+                  >
+                    Retake
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-small"
+                    onClick={() => setImage(null)}
+                    disabled={photoBusy}
+                  >
+                    Remove photo
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => photoInput.current?.click()}
+                disabled={photoBusy}
+              >
+                {photoBusy ? 'Preparing photo…' : '📷 Take a photo'}
+              </button>
+            )}
+            {photoError && (
+              <p className="form-error" role="alert">
+                {photoError}
+              </p>
+            )}
+            <p className="hint">
+              {image
+                ? 'Cells painted with this fabric show your photo.'
+                : 'Or pick a color and pattern below.'}
+            </p>
+          </div>
+          {!image && (
+            <>
+              <label>
+                Color
+                <input type="color" value={color} onChange={(e) => setColor(e.target.value)} />
               </label>
-            ))}
-          </fieldset>
+              <fieldset className="pattern-picker">
+                <legend>Pattern</legend>
+                {PATTERNS.map((p) => (
+                  <label key={p} className={`pattern-option ${pattern === p ? 'selected' : ''}`}>
+                    <input
+                      type="radio"
+                      name="pattern"
+                      value={p}
+                      checked={pattern === p}
+                      onChange={() => setPattern(p)}
+                    />
+                    <FabricSwatch
+                      fabric={{ ...preview, id: `pv-${p}`, pattern: p, image: undefined }}
+                      idPrefix="dlg"
+                      size={34}
+                    />
+                    <span>{p}</span>
+                  </label>
+                ))}
+              </fieldset>
+            </>
+          )}
           <div className="dialog-actions">
             {onDelete && (
               <button type="button" className="btn btn-danger" onClick={onDelete}>
