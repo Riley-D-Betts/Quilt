@@ -1,0 +1,16 @@
+{
+  "name": "Quilt Planner",
+  "short_name": "Quilts",
+  "description": "Plan quilt patterns cell by cell and total up the fabric you need.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f7f2e8",
+  "theme_color": "#f7f2e8",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

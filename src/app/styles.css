@@ -31,6 +31,8 @@ body {
   color: var(--ink);
   font-size: 17px;
   line-height: 1.45;
+  /* No rubber-band overscroll while finger-painting in the installed app */
+  overscroll-behavior: none;
 }
 
 button,
@@ -317,6 +319,10 @@ h2 {
   flex-direction: column;
   padding: 0.9rem 1.1rem;
   gap: 0.8rem;
+  /* Keep clear of the home-indicator / rounded corners in standalone mode */
+  padding-left: max(1.1rem, env(safe-area-inset-left));
+  padding-right: max(1.1rem, env(safe-area-inset-right));
+  padding-bottom: max(0.9rem, env(safe-area-inset-bottom));
 }
 
 .editor-header {
@@ -531,10 +537,16 @@ h2 {
 .quilt-editor-svg {
   max-width: 100%;
   max-height: calc(100vh - 160px);
+  /* dvh tracks the real visible viewport on tablets/phones */
+  max-height: calc(100dvh - 160px);
   height: auto;
   cursor: crosshair;
   background: var(--surface);
   box-shadow: var(--shadow);
+  /* No long-press callout / accidental selection while finger-painting */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .grid-hint {
