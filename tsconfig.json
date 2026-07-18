@@ -1,0 +1,6 @@
+{
+  // Solution-style config so editors type-check the client and the Worker
+  // with the right library types for each. Use `npm run check` to run both.
+  "files": [],
+  "references": [{ "path": "./tsconfig.app.json" }, { "path": "./tsconfig.worker.json" }]
+}
