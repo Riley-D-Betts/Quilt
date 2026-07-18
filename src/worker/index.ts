@@ -18,7 +18,13 @@ import {
   sessionCookie,
   verifyPassword,
 } from './auth';
-import { LIMITS, ValidationError, newQuiltData, validateQuiltData } from '../shared/quilt';
+import {
+  LIMITS,
+  ValidationError,
+  newQuiltData,
+  validateFabricFields,
+  validateQuiltData,
+} from '../shared/quilt';
 
 export interface Env {
   DB: D1Database;
@@ -206,6 +212,63 @@ app.delete('/api/quilts/:id', async (c) => {
     .bind(c.req.param('id'), c.get('user').id)
     .run();
   if (!result.meta.changes) return c.json({ error: 'Quilt not found.' }, 404);
+  return c.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Personal fabric library (shared across the user's quilts)
+// ---------------------------------------------------------------------------
+
+app.get('/api/fabrics', async (c) => {
+  const rows = await c.env.DB.prepare(
+    `SELECT id, name, color, pattern, image FROM fabric_library
+     WHERE user_id = ? ORDER BY created_at DESC`,
+  )
+    .bind(c.get('user').id)
+    .all<{ id: string; name: string; color: string; pattern: string; image: string | null }>();
+  return c.json({
+    fabrics: rows.results.map((r) => ({
+      id: r.id,
+      name: r.name,
+      color: r.color,
+      pattern: r.pattern,
+      ...(r.image ? { image: r.image } : {}),
+    })),
+  });
+});
+
+app.post('/api/fabrics', async (c) => {
+  const body = await readJson(c.req.raw);
+  let fields;
+  try {
+    fields = validateFabricFields(body, 'fabric');
+  } catch (err) {
+    return validationResponse(c, err);
+  }
+  const userId = c.get('user').id;
+  const count = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM fabric_library WHERE user_id = ?')
+    .bind(userId)
+    .first<{ n: number }>();
+  if ((count?.n ?? 0) >= LIMITS.maxLibraryFabrics) {
+    return c.json(
+      { error: `Your fabric library is full (${LIMITS.maxLibraryFabrics}). Remove some first.` },
+      400,
+    );
+  }
+  const id = crypto.randomUUID();
+  await c.env.DB.prepare(
+    'INSERT INTO fabric_library (id, user_id, name, color, pattern, image) VALUES (?, ?, ?, ?, ?, ?)',
+  )
+    .bind(id, userId, fields.name, fields.color, fields.pattern, fields.image ?? null)
+    .run();
+  return c.json({ fabric: { id, ...fields } }, 201);
+});
+
+app.delete('/api/fabrics/:id', async (c) => {
+  const result = await c.env.DB.prepare('DELETE FROM fabric_library WHERE id = ? AND user_id = ?')
+    .bind(c.req.param('id'), c.get('user').id)
+    .run();
+  if (!result.meta.changes) return c.json({ error: 'Fabric not found.' }, 404);
   return c.json({ ok: true });
 });
 

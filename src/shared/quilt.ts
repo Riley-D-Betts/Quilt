@@ -34,6 +34,14 @@ export const PATTERNS = [
   'crosshatch',
   'flowers',
   'zigzag',
+  'gingham',
+  'plaid',
+  'diamonds',
+  'stars',
+  'hearts',
+  'leaves',
+  'waves',
+  'pinstripe',
 ] as const;
 
 export type PatternId = (typeof PATTERNS)[number];
@@ -113,6 +121,8 @@ export const LIMITS = {
   maxImageChars: 150_000,
   /** Whole-quilt JSON budget, kept well under D1's per-value limits. */
   maxDataBytes: 900_000,
+  /** Saved fabrics per account in the personal library. */
+  maxLibraryFabrics: 300,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -516,26 +526,8 @@ export function validateQuiltData(raw: unknown): QuiltData {
     const id = str(fo.id, `fabrics[${i}].id`, 1, 40);
     if (seenIds.has(id)) throw new ValidationError(`Duplicate fabric id "${id}".`);
     seenIds.add(id);
-    const name = str(fo.name, `fabrics[${i}].name`, 1, LIMITS.maxFabricNameLen);
-    const color = str(fo.color, `fabrics[${i}].color`, 4, 7);
-    if (!/^#[0-9a-fA-F]{6}$/.test(color)) {
-      throw new ValidationError(`Fabric "${name}" has an invalid color.`);
-    }
-    const pattern = fo.pattern;
-    if (typeof pattern !== 'string' || !(PATTERNS as readonly string[]).includes(pattern)) {
-      throw new ValidationError(`Fabric "${name}" has an unknown pattern.`);
-    }
-    const fabric: Fabric = { id, name, color: color.toLowerCase(), pattern: pattern as PatternId };
-    if (fo.image !== undefined && fo.image !== null) {
-      if (typeof fo.image !== 'string' || !isFabricImage(fo.image)) {
-        throw new ValidationError(`Fabric "${name}" has an invalid photo.`);
-      }
-      if (fo.image.length > LIMITS.maxImageChars) {
-        throw new ValidationError(`Fabric "${name}"'s photo is too large.`);
-      }
-      fabric.image = fo.image;
-    }
-    return fabric;
+    const fields = validateFabricFields(fo, `fabrics[${i}]`);
+    return { id, ...fields };
   });
 
   let backgroundFabricId: string | null = null;
@@ -598,6 +590,40 @@ export function validateQuiltData(raw: unknown): QuiltData {
 }
 
 export class ValidationError extends Error {}
+
+/** The id-less fields of a fabric: name, color, pattern, optional image. */
+export type FabricFields = Omit<Fabric, 'id'>;
+
+/**
+ * Validate the id-less fields of a fabric (used both inside quilt data and
+ * for the personal fabric library, where the server assigns the id).
+ */
+export function validateFabricFields(raw: unknown, label = 'fabric'): FabricFields {
+  if (typeof raw !== 'object' || raw === null) {
+    throw new ValidationError(`${label} is invalid.`);
+  }
+  const fo = raw as Record<string, unknown>;
+  const name = str(fo.name, `${label}.name`, 1, LIMITS.maxFabricNameLen);
+  const color = str(fo.color, `${label}.color`, 4, 7);
+  if (!/^#[0-9a-fA-F]{6}$/.test(color)) {
+    throw new ValidationError(`Fabric "${name}" has an invalid color.`);
+  }
+  const pattern = fo.pattern;
+  if (typeof pattern !== 'string' || !(PATTERNS as readonly string[]).includes(pattern)) {
+    throw new ValidationError(`Fabric "${name}" has an unknown pattern.`);
+  }
+  const fields: FabricFields = { name, color: color.toLowerCase(), pattern: pattern as PatternId };
+  if (fo.image !== undefined && fo.image !== null) {
+    if (typeof fo.image !== 'string' || !isFabricImage(fo.image)) {
+      throw new ValidationError(`Fabric "${name}" has an invalid photo.`);
+    }
+    if (fo.image.length > LIMITS.maxImageChars) {
+      throw new ValidationError(`Fabric "${name}"'s photo is too large.`);
+    }
+    fields.image = fo.image;
+  }
+  return fields;
+}
 
 /** A base64 data URL in one of the formats the image pipeline can emit. */
 export function isFabricImage(s: string): boolean {

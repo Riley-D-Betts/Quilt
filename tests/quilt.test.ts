@@ -7,8 +7,10 @@ import {
   normalizeQuiltData,
   quiltGrid,
   resizeCells,
+  validateFabricFields,
   validateQuiltData,
   ValidationError,
+  PATTERNS,
   type QuiltData,
 } from '../src/shared/quilt';
 import { buildGrid, hitTest, splitPartHit } from '../src/shared/geometry';
@@ -395,6 +397,35 @@ describe('validateQuiltData', () => {
         }),
       ),
     ).toThrow(/Duplicate/);
+  });
+});
+
+describe('validateFabricFields (library fabrics)', () => {
+  it('accepts every built-in pattern', () => {
+    for (const pattern of PATTERNS) {
+      const f = validateFabricFields({ name: 'Test', color: '#aabbcc', pattern });
+      expect(f.pattern).toBe(pattern);
+    }
+  });
+
+  it('accepts an image and normalizes the color', () => {
+    const image = 'data:image/png;base64,' + 'B'.repeat(200);
+    const f = validateFabricFields({ name: ' Stash ', color: '#AABBCC', pattern: 'solid', image });
+    expect(f).toEqual({ name: 'Stash', color: '#aabbcc', pattern: 'solid', image });
+  });
+
+  it('rejects bad fields', () => {
+    expect(() => validateFabricFields(null)).toThrow(ValidationError);
+    expect(() => validateFabricFields({ name: '', color: '#aabbcc', pattern: 'solid' })).toThrow();
+    expect(() =>
+      validateFabricFields({ name: 'X', color: 'blue', pattern: 'solid' }),
+    ).toThrow(/color/);
+    expect(() =>
+      validateFabricFields({ name: 'X', color: '#aabbcc', pattern: 'toile' }),
+    ).toThrow(/pattern/);
+    expect(() =>
+      validateFabricFields({ name: 'X', color: '#aabbcc', pattern: 'solid', image: 'nope' }),
+    ).toThrow(/photo/);
   });
 });
 

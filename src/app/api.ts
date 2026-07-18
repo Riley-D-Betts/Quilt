@@ -1,5 +1,11 @@
 /** Thin typed client for the Worker API. */
-import { normalizeQuiltData, type QuiltData, type QuiltSummary } from '../shared/quilt';
+import {
+  normalizeQuiltData,
+  type Fabric,
+  type FabricFields,
+  type QuiltData,
+  type QuiltSummary,
+} from '../shared/quilt';
 
 export class ApiError extends Error {
   constructor(
@@ -75,4 +81,10 @@ export const api = {
       quilt: normalizeSummary(r.quilt),
     })),
   deleteQuilt: (id: string) => request<{ ok: true }>(`/api/quilts/${id}`, { method: 'DELETE' }),
+
+  listLibraryFabrics: () => request<{ fabrics: Fabric[] }>('/api/fabrics'),
+  saveLibraryFabric: (fields: FabricFields) =>
+    request<{ fabric: Fabric }>('/api/fabrics', { method: 'POST', body: JSON.stringify(fields) }),
+  deleteLibraryFabric: (id: string) =>
+    request<{ ok: true }>(`/api/fabrics/${id}`, { method: 'DELETE' }),
 };

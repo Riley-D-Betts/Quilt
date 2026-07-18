@@ -22,6 +22,7 @@ import { splitPartCount } from '../../shared/geometry';
 import { FabricSwatch, QuiltSvg } from './QuiltSvg';
 import { TotalsPanel } from './TotalsPanel';
 import { DrawDialog } from './DrawDialog';
+import { LibraryDialog } from './LibraryDialog';
 import { processFabricPhoto } from '../photo';
 
 type SaveState = 'saved' | 'dirty' | 'saving' | 'error';
@@ -95,6 +96,7 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
     initialQuilt.data.fabrics[0]?.id ?? null,
   );
   const [editingFabric, setEditingFabric] = useState<Fabric | 'new' | null>(null);
+  const [showLibrary, setShowLibrary] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
   const dims = useMemo(() => gridDims(data), [data]);
@@ -522,14 +524,25 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
           <section className="panel">
             <div className="panel-title-row">
               <h2>Fabrics</h2>
-              <button
-                type="button"
-                className="btn btn-small"
-                onClick={() => setEditingFabric('new')}
-                disabled={data.fabrics.length >= LIMITS.maxFabrics}
-              >
-                + Add
-              </button>
+              <span className="panel-title-actions">
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  onClick={() => setShowLibrary(true)}
+                  disabled={data.fabrics.length >= LIMITS.maxFabrics}
+                  title="Add a fabric from My Fabrics"
+                >
+                  📚 My fabrics
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  onClick={() => setEditingFabric('new')}
+                  disabled={data.fabrics.length >= LIMITS.maxFabrics}
+                >
+                  + Add
+                </button>
+              </span>
             </div>
             <ul className="fabric-list">
               {data.fabrics.map((fabric) => {
@@ -783,6 +796,15 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
           onClose={() => setEditingFabric(null)}
         />
       )}
+      {showLibrary && (
+        <LibraryDialog
+          onPick={(fields) => {
+            const added = saveFabric({ id: `f-${crypto.randomUUID().slice(0, 8)}`, ...fields });
+            if (added) setShowLibrary(false);
+          }}
+          onClose={() => setShowLibrary(false)}
+        />
+      )}
     </div>
   );
 }
@@ -921,10 +943,36 @@ function FabricDialog({
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
   const [drawing, setDrawing] = useState(false);
+  const [libState, setLibState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [libError, setLibError] = useState<string | null>(null);
   /** Opens the camera directly (capture="environment"). */
   const cameraInput = useRef<HTMLInputElement>(null);
   /** Opens the photo library / camera roll (no capture attribute). */
   const libraryInput = useRef<HTMLInputElement>(null);
+
+  // A fabric edited after saving to the library can be saved again.
+  useEffect(() => {
+    setLibState((s) => (s === 'saved' ? 'idle' : s));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [name, color, pattern, image]);
+
+  async function saveToLibrary() {
+    if (photoBusy || libState === 'saving') return;
+    setLibState('saving');
+    setLibError(null);
+    try {
+      await api.saveLibraryFabric({
+        name: name.trim() || 'Unnamed fabric',
+        color,
+        pattern,
+        ...(image ? { image } : {}),
+      });
+      setLibState('saved');
+    } catch (err) {
+      setLibState('error');
+      setLibError(err instanceof Error ? err.message : 'Could not save to My Fabrics.');
+    }
+  }
   // Only dismiss when the press STARTED on the backdrop, so a drag that
   // begins inside the dialog (e.g. selecting text) can't close it.
   const pressStartedOnBackdrop = useRef(false);
@@ -1118,6 +1166,26 @@ function FabricDialog({
               </fieldset>
             </>
           )}
+          <div className="library-save-row">
+            <button
+              type="button"
+              className="btn btn-small"
+              onClick={saveToLibrary}
+              disabled={photoBusy || libState === 'saving' || libState === 'saved'}
+              title="Keep this fabric on your account to reuse in other quilts"
+            >
+              {libState === 'saving'
+                ? 'Saving…'
+                : libState === 'saved'
+                  ? '✓ In My Fabrics'
+                  : '♡ Save to My Fabrics'}
+            </button>
+            {libState === 'error' && (
+              <span className="form-error" role="alert">
+                {libError}
+              </span>
+            )}
+          </div>
           <div className="dialog-actions">
             {onDelete && (
               <button type="button" className="btn btn-danger" onClick={onDelete}>
