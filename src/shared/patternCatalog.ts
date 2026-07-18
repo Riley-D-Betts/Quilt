@@ -105,11 +105,13 @@ for (const [sizeName, size] of [
 // Stripes: 4 directions x 5 weights x 3 styles = 60
 // ---------------------------------------------------------------------------
 
+// SVG y points DOWN, so rotate(135) leans a horizontal bar up-right (↗)
+// and rotate(45) leans it down-right (↘).
 const STRIPE_ANGLES: [string, number][] = [
   ['Horizontal', 0],
   ['Vertical', 90],
-  ['Diagonal ↗', 45],
-  ['Diagonal ↘', 135],
+  ['Diagonal ↗', 135],
+  ['Diagonal ↘', 45],
 ];
 const STRIPE_WEIGHTS: [string, number][] = [
   ['Pin', 0.04],
@@ -126,7 +128,7 @@ const STRIPE_STYLES: [string, string][] = [
 for (const [angleName, angle] of STRIPE_ANGLES) {
   for (const [weightName, weight] of STRIPE_WEIGHTS) {
     for (const [styleSuffix, style] of STRIPE_STYLES) {
-      const slugAngle = angleName.toLowerCase().replace(/[^a-z]/g, '') + (angle === 45 ? '-up' : angle === 135 ? '-down' : '');
+      const slugAngle = angleName.toLowerCase().replace(/[^a-z]/g, '') + (angle === 135 ? '-up' : angle === 45 ? '-down' : '');
       add(
         `stripes-${slugAngle}-${weightName.toLowerCase()}${style === 'solid' ? '' : '-' + style}`,
         `${weightName} ${angleName} Stripes${styleSuffix}`,

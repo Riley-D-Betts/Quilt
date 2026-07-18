@@ -32,39 +32,46 @@ export function renderPatternTile(
         return { size: t, node: <circle cx={t / 2} cy={t / 2} r={r} fill={accent} /> };
       }
       if (arrangement === 'offset') {
+        // Quarter-placed dots clip at the tile edge above r = t/4.
+        const ro = Math.min(r, (t / 4) * 0.95);
         return {
           size: t,
           node: (
             <>
-              <circle cx={t / 4} cy={t / 4} r={r} fill={accent} />
-              <circle cx={(3 * t) / 4} cy={(3 * t) / 4} r={r} fill={accent} />
+              <circle cx={t / 4} cy={t / 4} r={ro} fill={accent} />
+              <circle cx={(3 * t) / 4} cy={(3 * t) / 4} r={ro} fill={accent} />
             </>
           ),
         };
       }
-      // scatter
+      // scatter: every center keeps at least r of margin from the tile edge
+      const rs = Math.min(r, t * 0.29);
       return {
         size: t * 1.6,
         node: (
           <>
-            <circle cx={t * 0.3} cy={t * 0.35} r={r} fill={accent} />
-            <circle cx={t * 1.15} cy={t * 0.2} r={r * 0.8} fill={accent} />
-            <circle cx={t * 0.75} cy={t * 0.95} r={r * 0.9} fill={accent} />
-            <circle cx={t * 1.35} cy={t * 1.25} r={r} fill={accent} />
-            <circle cx={t * 0.2} cy={t * 1.35} r={r * 0.7} fill={accent} />
+            <circle cx={t * 0.35} cy={t * 0.35} r={rs} fill={accent} />
+            <circle cx={t * 1.2} cy={t * 0.35} r={rs * 0.8} fill={accent} />
+            <circle cx={t * 0.78} cy={t * 0.92} r={rs * 0.9} fill={accent} />
+            <circle cx={t * 1.25} cy={t * 1.25} r={rs} fill={accent} />
+            <circle cx={t * 0.33} cy={t * 1.25} r={rs * 0.7} fill={accent} />
           </>
         ),
       };
     }
     case 'rings': {
+      // Ring + half its stroke must stay inside the t/4 quarter placement,
+      // or the tile clips the circles into rounded squares.
       const t = 16;
-      const r = t * Number(p.size);
+      const maxR = (t / 4) * 0.95;
+      const swRatio = p.thick ? 0.6 : 0.3;
+      const r = Math.min(t * Number(p.size), maxR / (1 + swRatio / 2));
       return {
         size: t,
         node: (
           <>
-            <circle cx={t / 4} cy={t / 4} r={r} fill="none" stroke={accent} strokeWidth={p.thick ? r * 0.6 : r * 0.3} />
-            <circle cx={(3 * t) / 4} cy={(3 * t) / 4} r={r} fill="none" stroke={accent} strokeWidth={p.thick ? r * 0.6 : r * 0.3} />
+            <circle cx={t / 4} cy={t / 4} r={r} fill="none" stroke={accent} strokeWidth={r * swRatio} />
+            <circle cx={(3 * t) / 4} cy={(3 * t) / 4} r={r} fill="none" stroke={accent} strokeWidth={r * swRatio} />
           </>
         ),
       };
@@ -163,15 +170,19 @@ export function renderPatternTile(
       };
     }
     case 'houndstooth': {
+      // Classic simplified houndstooth: a solid check with a tooth pulled
+      // off two corners, tiling into the jagged interlock.
       const t = 10 * Number(p.scale);
       const u = t / 4;
       return {
         size: t,
         node: (
-          <path
-            d={`M 0 0 H ${2 * u} L ${u} ${u} H ${2 * u} V ${2 * u} L ${3 * u} ${u} V ${2 * u} H ${4 * u} V ${3 * u} H ${2 * u} L ${3 * u} ${2 * u} H ${2 * u} V 0 Z`}
-            fill={accent}
-          />
+          <g fill={accent}>
+            <rect x={0} y={0} width={2 * u} height={2 * u} />
+            <path d={`M ${2 * u} 0 L ${4 * u} 0 L ${2 * u} ${2 * u} Z`} />
+            <path d={`M 0 ${2 * u} L ${2 * u} ${2 * u} L 0 ${4 * u} Z`} />
+            <path d={`M ${2 * u} ${2 * u} L ${3 * u} ${3 * u} L ${2 * u} ${4 * u} Z`} />
+          </g>
         ),
       };
     }
@@ -249,13 +260,15 @@ export function renderPatternTile(
       };
     }
     case 'herringbone': {
+      // Two columns with MIRRORED slants — the alternating V is the whole
+      // point of herringbone.
       const t = 10 * Number(p.scale);
       return {
         size: t,
         node: (
           <g stroke={accent} strokeWidth={t * 0.1}>
             <path d={`M 0 ${t} L ${t / 2} ${t / 2} L ${t / 2} 0`} fill="none" />
-            <path d={`M ${t / 2} ${t} L ${t} ${t / 2} L ${t} 0`} fill="none" transform={`translate(0 0) scale(1 1)`} />
+            <path d={`M ${t} ${t} L ${t / 2} ${t / 2} L ${t / 2} 0`} fill="none" />
           </g>
         ),
       };

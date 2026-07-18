@@ -295,6 +295,14 @@ app.post('/api/colors', async (c) => {
     return validationResponse(c, err);
   }
   const userId = c.get('user').id;
+  // Saving the same color twice is a no-op returning the existing entry —
+  // checked BEFORE the cap, so a full palette never rejects a re-save.
+  const existing = await c.env.DB.prepare(
+    'SELECT id, color, name FROM color_library WHERE user_id = ? AND color = ?',
+  )
+    .bind(userId, fields.color)
+    .first<{ id: string; color: string; name: string }>();
+  if (existing) return c.json({ color: existing });
   const count = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM color_library WHERE user_id = ?')
     .bind(userId)
     .first<{ n: number }>();
@@ -304,13 +312,6 @@ app.post('/api/colors', async (c) => {
       400,
     );
   }
-  // Saving the same color twice is a no-op returning the existing entry.
-  const existing = await c.env.DB.prepare(
-    'SELECT id, color, name FROM color_library WHERE user_id = ? AND color = ?',
-  )
-    .bind(userId, fields.color)
-    .first<{ id: string; color: string; name: string }>();
-  if (existing) return c.json({ color: existing });
   const id = crypto.randomUUID();
   await c.env.DB.prepare(
     'INSERT INTO color_library (id, user_id, color, name) VALUES (?, ?, ?, ?)',

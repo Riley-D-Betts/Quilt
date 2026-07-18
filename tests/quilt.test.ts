@@ -572,6 +572,15 @@ describe('pattern catalog', () => {
     );
   });
 
+  it('diagonal stripe arrows match SVG rotation (y-down: 135 leans up-right)', () => {
+    const up = getPattern('stripes-diagonal-up-wide')!;
+    const down = getPattern('stripes-diagonal-down-wide')!;
+    expect(up.label).toContain('↗');
+    expect(up.p.angle).toBe(135);
+    expect(down.label).toContain('↘');
+    expect(down.p.angle).toBe(45);
+  });
+
   it('every catalog id passes fabric validation', () => {
     for (const d of PATTERN_CATALOG) {
       expect(() =>

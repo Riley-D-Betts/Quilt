@@ -41,6 +41,11 @@ export function PatternPicker({
         placeholder="Search: dots, floral, gingham, stars…"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={(e) => {
+          // The picker lives inside the fabric dialog's <form>; Enter here
+          // must filter, never submit the whole dialog.
+          if (e.key === 'Enter') e.preventDefault();
+        }}
         aria-label="Search patterns"
       />
       <div className="pattern-chips" role="group" aria-label="Pattern categories">
