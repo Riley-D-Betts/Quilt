@@ -1,6 +1,6 @@
 /**
- * The fabric shopping list: per-fabric cell counts, square footage
- * (including seam allowance) and a practical yardage estimate.
+ * The fabric shopping list: per-fabric piece counts, cut sizes, square
+ * footage (including seam allowance) and a practical yardage estimate.
  */
 import { BOLT_WIDTH_IN, type TotalsReport } from '../../shared/quilt';
 import { FabricSwatch } from './QuiltSvg';
@@ -14,7 +14,7 @@ export function TotalsPanel({
   seamAllowanceIn: number;
   printable?: boolean;
 }) {
-  const used = report.totals.filter((t) => t.cellCount > 0);
+  const used = report.totals.filter((t) => t.pieceCount > 0);
   const totalCutSqFt = round2sum(used.map((t) => t.cutSqFt));
 
   return (
@@ -32,7 +32,7 @@ export function TotalsPanel({
             <tr>
               <th className="col-swatch" aria-label="Swatch"></th>
               <th>Fabric</th>
-              <th className="num">Cells</th>
+              <th className="num">Pieces</th>
               <th className="num">Sq&nbsp;ft</th>
               <th className="num">Yards*</th>
             </tr>
@@ -49,12 +49,13 @@ export function TotalsPanel({
                 </td>
                 <td>
                   {t.fabric.name}
-                  <span className="muted small cut-size">
-                    {' '}
-                    cut {formatInches(t.cutWidthIn)} × {formatInches(t.cutHeightIn)}
-                  </span>
+                  {t.groups.map((g, i) => (
+                    <span key={i} className="muted small cut-size">
+                      {g.count} × {formatInches(g.cutWIn)} × {formatInches(g.cutHIn)}
+                    </span>
+                  ))}
                 </td>
-                <td className="num">{t.cellCount}</td>
+                <td className="num">{t.pieceCount}</td>
                 <td className="num">{t.cutSqFt.toFixed(2)}</td>
                 <td className="num">{t.yards === null ? '—' : formatYards(t.yards)}</td>
               </tr>
@@ -64,22 +65,29 @@ export function TotalsPanel({
             <tr>
               <td></td>
               <td>Total</td>
-              <td className="num">{report.totalCells - report.unassignedCells}</td>
+              <td className="num">{used.reduce((n, t) => n + t.pieceCount, 0)}</td>
               <td className="num">{totalCutSqFt.toFixed(2)}</td>
               <td></td>
             </tr>
           </tfoot>
         </table>
       )}
+      {report.backgroundSqFt !== null && !report.backgroundAssigned && report.backgroundSqFt > 0 && (
+        <p className="hint warn">
+          The space between the shapes needs about {report.backgroundSqFt.toFixed(1)} sq ft of
+          background fabric — pick one under “Quilt size &amp; shape”.
+        </p>
+      )}
       {report.unassignedCells > 0 && (
         <p className="hint warn">
-          {report.unassignedCells} cell{report.unassignedCells === 1 ? '' : 's'} still blank.
+          {report.unassignedCells} piece{report.unassignedCells === 1 ? '' : 's'} still blank.
         </p>
       )}
       <p className="hint">
         Sq ft includes {seamAllowanceIn > 0 ? `the ${formatInches(seamAllowanceIn)} seam allowance` : 'no seam allowance'} on
-        every side. *Yards assume {BOLT_WIDTH_IN}&Prime;-wide fabric, cut in strips, rounded up to
-        the next ⅛ yard — a comfortable shopping estimate.
+        every side, with shaped pieces counted by their cut rectangles. *Yards assume {BOLT_WIDTH_IN}
+        &Prime;-wide fabric, cut in strips, rounded up to the next ⅛ yard — a comfortable shopping
+        estimate.
       </p>
     </section>
   );
@@ -104,7 +112,7 @@ export function formatInches(inches: number): string {
     }
   }
   if (Math.abs(frac) < 0.001) return `${whole}″`;
-  return `${inches}″`;
+  return `${round2disp(inches)}″`;
 }
 
 /** Yardage is always in eighths (estimateYards rounds up to ⅛). */
@@ -127,4 +135,8 @@ export function formatYards(yards: number): string {
 
 function round2sum(values: number[]): number {
   return Math.round(values.reduce((a, b) => a + b, 0) * 100) / 100;
+}
+
+function round2disp(n: number): number {
+  return Math.round(n * 100) / 100;
 }

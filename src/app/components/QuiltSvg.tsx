@@ -1,10 +1,19 @@
 /**
  * Renders a quilt as SVG. Used at full size in the editor (interactive)
- * and small in list thumbnails (static). Fabric patterns are SVG <pattern>
- * defs parameterized by each fabric's base color.
+ * and small in list thumbnails (static). All cell geometry comes from the
+ * shared geometry module, so squares, triangles, hexagons, octagons and
+ * stamp shapes all render — and hit-test — through the same code path.
+ * Fabric patterns are SVG <pattern> defs parameterized by each fabric.
  */
 import { memo, useMemo } from 'react';
-import { gridDims, type Fabric, type QuiltData } from '../../shared/quilt';
+import {
+  isSplitCell,
+  isStampShape,
+  quiltGrid,
+  type Fabric,
+  type QuiltData,
+} from '../../shared/quilt';
+import { hitTest, splitPartHit, splitPartPolygons, type CellGeom } from '../../shared/geometry';
 
 /** Logical pixels per inch inside the SVG viewBox. */
 export const PX_PER_IN = 10;
@@ -15,8 +24,8 @@ interface QuiltSvgProps {
   idPrefix: string;
   className?: string;
   showGridLines?: boolean;
-  onCellPointerDown?: (index: number, e: React.PointerEvent) => void;
-  onCellPointerMove?: (index: number, e: React.PointerEvent) => void;
+  onCellPointerDown?: (index: number, part: number | null, e: React.PointerEvent) => void;
+  onCellPointerMove?: (index: number, part: number | null, e: React.PointerEvent) => void;
   onPointerUp?: () => void;
 }
 
@@ -29,11 +38,9 @@ export const QuiltSvg = memo(function QuiltSvg({
   onCellPointerMove,
   onPointerUp,
 }: QuiltSvgProps) {
-  const dims = gridDims(data);
-  const cellW = data.cellWidthIn * PX_PER_IN;
-  const cellH = data.cellHeightIn * PX_PER_IN;
-  const width = dims.cols * cellW;
-  const height = dims.rows * cellH;
+  const grid = useMemo(() => quiltGrid(data), [data]);
+  const width = grid.widthIn * PX_PER_IN;
+  const height = grid.heightIn * PX_PER_IN;
 
   const fabricById = useMemo(() => {
     const m = new Map<string, Fabric>();
@@ -43,20 +50,40 @@ export const QuiltSvg = memo(function QuiltSvg({
 
   const interactive = Boolean(onCellPointerDown);
 
-  function cellIndexFromEvent(e: React.PointerEvent<SVGSVGElement>): number | null {
-    // Map the pointer into viewBox coordinates via the SVG's own transform.
-    // (A naive getBoundingClientRect proportion breaks when CSS sizes the
-    // element to a different aspect ratio than the viewBox and
-    // preserveAspectRatio letterboxes the drawing.)
+  const fillFor = (fabricId: string | null): string => {
+    const fabric = fabricId ? fabricById.get(fabricId) : undefined;
+    if (!fabric) return `url(#${idPrefix}-unassigned)`;
+    if (!fabric.image && fabric.pattern === 'solid') return fabric.color;
+    return `url(#${idPrefix}-f-${fabric.id})`;
+  };
+
+  function locate(e: React.PointerEvent<SVGSVGElement>): { index: number; part: number | null } | null {
     const svg = e.currentTarget;
     const ctm = svg.getScreenCTM();
     if (!ctm) return null;
     const pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(ctm.inverse());
-    const col = Math.floor(pt.x / cellW);
-    const row = Math.floor(pt.y / cellH);
-    if (col < 0 || col >= dims.cols || row < 0 || row >= dims.rows) return null;
-    return row * dims.cols + col;
+    const xIn = pt.x / PX_PER_IN;
+    const yIn = pt.y / PX_PER_IN;
+    const index = hitTest(grid, xIn, yIn, {
+      widthIn: data.widthIn,
+      heightIn: data.heightIn,
+      cellWidthIn: data.cellWidthIn,
+      cellHeightIn: data.cellHeightIn,
+      cellShape: data.cellShape,
+    });
+    if (index === null) return null;
+    const cell = data.cells[index] ?? null;
+    if (isSplitCell(cell)) {
+      const geom = grid.cells[index];
+      const u = clamp01((xIn - (geom.cx - geom.cutWIn / 2)) / geom.cutWIn);
+      const v = clamp01((yIn - (geom.cy - geom.cutHIn / 2)) / geom.cutHIn);
+      return { index, part: splitPartHit(cell.split, u, v) };
+    }
+    return { index, part: null };
   }
+
+  const stamp = isStampShape(data.cellShape);
+  const usedFabricDefs = data.fabrics.filter((f) => f.image || f.pattern !== 'solid');
 
   return (
     <svg
@@ -68,16 +95,16 @@ export const QuiltSvg = memo(function QuiltSvg({
       onPointerDown={
         interactive
           ? (e) => {
-              const i = cellIndexFromEvent(e);
-              if (i !== null) onCellPointerDown!(i, e);
+              const hit = locate(e);
+              if (hit) onCellPointerDown!(hit.index, hit.part, e);
             }
           : undefined
       }
       onPointerMove={
         interactive && onCellPointerMove
           ? (e) => {
-              const i = cellIndexFromEvent(e);
-              if (i !== null) onCellPointerMove(i, e);
+              const hit = locate(e);
+              if (hit) onCellPointerMove(hit.index, hit.part, e);
             }
           : undefined
       }
@@ -85,11 +112,9 @@ export const QuiltSvg = memo(function QuiltSvg({
       onPointerLeave={onPointerUp}
     >
       <defs>
-        {data.fabrics
-          .filter((f) => f.image || f.pattern !== 'solid')
-          .map((f) => (
-            <PatternDef key={f.id} fabric={f} idPrefix={idPrefix} />
-          ))}
+        {usedFabricDefs.map((f) => (
+          <PatternDef key={f.id} fabric={f} idPrefix={idPrefix} />
+        ))}
         <pattern
           id={`${idPrefix}-unassigned`}
           width={8}
@@ -102,28 +127,26 @@ export const QuiltSvg = memo(function QuiltSvg({
         </pattern>
       </defs>
 
-      {data.cells.map((fabricId, i) => {
-        const row = Math.floor(i / dims.cols);
-        const col = i % dims.cols;
-        const fabric = fabricId ? fabricById.get(fabricId) : undefined;
-        const fill = fabric
-          ? !fabric.image && fabric.pattern === 'solid'
-            ? fabric.color
-            : `url(#${idPrefix}-f-${fabric.id})`
-          : `url(#${idPrefix}-unassigned)`;
-        return (
-          <rect
-            key={i}
-            x={col * cellW}
-            y={row * cellH}
-            width={cellW}
-            height={cellH}
-            fill={fill}
-            stroke={showGridLines ? 'rgba(60, 42, 33, 0.25)' : 'none'}
-            strokeWidth={showGridLines ? 0.6 : 0}
-          />
-        );
-      })}
+      {stamp && (
+        <rect
+          x={0}
+          y={0}
+          width={width}
+          height={height}
+          fill={fillFor(data.backgroundFabricId)}
+        />
+      )}
+
+      {grid.cells.map((geom) => (
+        <CellShapeView
+          key={geom.index}
+          geom={geom}
+          cell={data.cells[geom.index] ?? null}
+          fillFor={fillFor}
+          showGridLines={showGridLines}
+        />
+      ))}
+
       <rect
         x={0}
         y={0}
@@ -137,21 +160,106 @@ export const QuiltSvg = memo(function QuiltSvg({
   );
 });
 
+const CELL_STROKE = 'rgba(60, 42, 33, 0.25)';
+
+function CellShapeView({
+  geom,
+  cell,
+  fillFor,
+  showGridLines,
+}: {
+  geom: CellGeom;
+  cell: QuiltData['cells'][number];
+  fillFor: (fabricId: string | null) => string;
+  showGridLines: boolean;
+}) {
+  const stroke = showGridLines ? CELL_STROKE : 'none';
+  const strokeWidth = showGridLines ? 0.6 : 0;
+
+  if (isSplitCell(cell)) {
+    // Splits exist only on square cells; reconstruct the cell box.
+    const x0 = (geom.cx - geom.cutWIn / 2) * PX_PER_IN;
+    const y0 = (geom.cy - geom.cutHIn / 2) * PX_PER_IN;
+    const x1 = (geom.cx + geom.cutWIn / 2) * PX_PER_IN;
+    const y1 = (geom.cy + geom.cutHIn / 2) * PX_PER_IN;
+    const polys = splitPartPolygons(cell.split, x0, y0, x1, y1);
+    return (
+      <g>
+        {polys.map((poly, p) => (
+          <path
+            key={p}
+            d={polyPath(poly, 1)}
+            fill={fillFor(cell.parts[p] ?? null)}
+            stroke={stroke}
+            strokeWidth={strokeWidth}
+          />
+        ))}
+      </g>
+    );
+  }
+
+  const fill = fillFor(cell);
+  if (geom.r !== undefined) {
+    return (
+      <circle
+        cx={geom.cx * PX_PER_IN}
+        cy={geom.cy * PX_PER_IN}
+        r={geom.r * PX_PER_IN}
+        fill={fill}
+        stroke={stroke}
+        strokeWidth={strokeWidth}
+      />
+    );
+  }
+  return (
+    <path
+      d={polyPath(geom.points!, PX_PER_IN)}
+      fill={fill}
+      stroke={stroke}
+      strokeWidth={strokeWidth}
+    />
+  );
+}
+
+function polyPath(points: [number, number][], scale: number): string {
+  return (
+    points.map(([x, y], i) => `${i === 0 ? 'M' : 'L'} ${r2(x * scale)} ${r2(y * scale)}`).join(' ') +
+    ' Z'
+  );
+}
+
+function r2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+function clamp01(n: number): number {
+  return Math.max(0, Math.min(1, n));
+}
+
 /**
  * One tile-able motif per pattern id, drawn in a contrast color derived
  * from the fabric's base color so light and dark fabrics both read well.
- * Fabrics with a photo instead cover each shape with the photo.
+ * Fabrics with an image instead cover each shape with the image.
  */
 function PatternDef({ fabric, idPrefix }: { fabric: Fabric; idPrefix: string }) {
   const id = `${idPrefix}-f-${fabric.id}`;
   if (fabric.image) {
-    // objectBoundingBox: the photo covers each cell (or swatch) it fills.
+    // The pattern's own viewBox + slice cover-crops the (square) swatch
+    // against each shape's real bounding box. A bare objectBoundingBox
+    // image would stretch instead: preserveAspectRatio resolves before the
+    // anisotropic bounding-box transform, so it must live on the pattern.
     return (
-      <pattern id={id} width={1} height={1} patternContentUnits="objectBoundingBox">
+      <pattern
+        id={id}
+        width={1}
+        height={1}
+        viewBox="0 0 256 256"
+        preserveAspectRatio="xMidYMid slice"
+      >
         <image
           href={fabric.image}
-          width={1}
-          height={1}
+          width={256}
+          height={256}
           preserveAspectRatio="xMidYMid slice"
         />
       </pattern>
@@ -230,8 +338,8 @@ function PatternDef({ fabric, idPrefix }: { fabric: Fabric; idPrefix: string }) 
 }
 
 /**
- * A small square swatch showing a fabric's color + pattern, for palettes
- * and totals tables.
+ * A small square swatch showing a fabric's look, for palettes and totals
+ * tables.
  */
 export function FabricSwatch({
   fabric,

@@ -127,7 +127,9 @@ export function QuiltList({ email, onOpen, onSignOut, onError }: QuiltListProps)
                   <h2>{quilt.name}</h2>
                   <p className="muted">
                     {dims.finishedWidthIn}&Prime; × {dims.finishedHeightIn}&Prime; ·{' '}
-                    {dims.cols} × {dims.rows} cells
+                    {quilt.data.cellShape === 'square'
+                      ? `${dims.cols} × ${dims.rows} cells`
+                      : `${dims.count} pieces`}
                   </p>
                   <p className="muted small">Updated {formatDate(quilt.updatedAt)}</p>
                   <div className="quilt-card-actions">

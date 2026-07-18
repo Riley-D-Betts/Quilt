@@ -1,5 +1,5 @@
 /** Thin typed client for the Worker API. */
-import type { QuiltData, QuiltSummary } from '../shared/quilt';
+import { normalizeQuiltData, type QuiltData, type QuiltSummary } from '../shared/quilt';
 
 export class ApiError extends Error {
   constructor(
@@ -33,6 +33,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+/** Upgrade any stored quilt (v1 or v2) to the current data shape. */
+function normalizeSummary(q: QuiltSummary): QuiltSummary {
+  return { ...q, data: normalizeQuiltData(q.data) };
+}
+
 export const api = {
   register: (email: string, password: string) =>
     request<{ email: string }>('/api/auth/register', {
@@ -47,19 +52,27 @@ export const api = {
   logout: () => request<{ ok: true }>('/api/auth/logout', { method: 'POST' }),
   me: () => request<{ email: string }>('/api/auth/me'),
 
-  listQuilts: () => request<{ quilts: QuiltSummary[] }>('/api/quilts'),
+  listQuilts: () =>
+    request<{ quilts: QuiltSummary[] }>('/api/quilts').then((r) => ({
+      quilts: r.quilts.map(normalizeSummary),
+    })),
   createQuilt: (name?: string, data?: QuiltData) =>
     request<{ quilt: QuiltSummary }>('/api/quilts', {
       method: 'POST',
       body: JSON.stringify({ name, data }),
-    }),
-  getQuilt: (id: string) => request<{ quilt: QuiltSummary }>(`/api/quilts/${id}`),
+    }).then((r) => ({ quilt: normalizeSummary(r.quilt) })),
+  getQuilt: (id: string) =>
+    request<{ quilt: QuiltSummary }>(`/api/quilts/${id}`).then((r) => ({
+      quilt: normalizeSummary(r.quilt),
+    })),
   updateQuilt: (id: string, patch: { name?: string; data?: QuiltData }) =>
     request<{ quilt: QuiltSummary }>(`/api/quilts/${id}`, {
       method: 'PUT',
       body: JSON.stringify(patch),
-    }),
+    }).then((r) => ({ quilt: normalizeSummary(r.quilt) })),
   copyQuilt: (id: string) =>
-    request<{ quilt: QuiltSummary }>(`/api/quilts/${id}/copy`, { method: 'POST' }),
+    request<{ quilt: QuiltSummary }>(`/api/quilts/${id}/copy`, { method: 'POST' }).then((r) => ({
+      quilt: normalizeSummary(r.quilt),
+    })),
   deleteQuilt: (id: string) => request<{ ok: true }>(`/api/quilts/${id}`, { method: 'DELETE' }),
 };
