@@ -18,10 +18,11 @@ import {
   type QuiltSummary,
   type SplitKind,
 } from '../../shared/quilt';
-import { splitPartCount } from '../../shared/geometry';
+import { gridCount, splitPartCount } from '../../shared/geometry';
 import { FabricSwatch, QuiltSvg } from './QuiltSvg';
 import { TotalsPanel } from './TotalsPanel';
 import { DrawDialog } from './DrawDialog';
+import { LibraryDialog } from './LibraryDialog';
 import { processFabricPhoto } from '../photo';
 
 type SaveState = 'saved' | 'dirty' | 'saving' | 'error';
@@ -95,6 +96,7 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
     initialQuilt.data.fabrics[0]?.id ?? null,
   );
   const [editingFabric, setEditingFabric] = useState<Fabric | 'new' | null>(null);
+  const [showLibrary, setShowLibrary] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
   const dims = useMemo(() => gridDims(data), [data]);
@@ -109,15 +111,18 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
   const changeSeq = useRef(0);
   const firstRender = useRef(true);
 
-  const doSave = useCallback(async (): Promise<boolean> => {
-    const seqAtStart = changeSeq.current;
+  // Saves are serialized into one chain: overlapping PUTs could otherwise
+  // land out of order server-side (last-writer-wins) and resurrect stale
+  // data. The chain also re-saves immediately when edits arrived while a
+  // request was in flight, instead of leaving the state wedged at dirty.
+  const saveChain = useRef<Promise<boolean> | null>(null);
+
+  const performSave = useCallback(async (): Promise<boolean> => {
     const { name, data } = latestRef.current;
     setSaveState('saving');
     setSaveError(null);
     try {
       await api.updateQuilt(initialQuilt.id, { name: name.trim() || 'Untitled Quilt', data });
-      // Only report "saved" if nothing changed while the request was in flight.
-      setSaveState(changeSeq.current === seqAtStart ? 'saved' : 'dirty');
       return true;
     } catch (err) {
       setSaveState('error');
@@ -131,6 +136,28 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
       return false;
     }
   }, [initialQuilt.id]);
+
+  const doSave = useCallback((): Promise<boolean> => {
+    if (saveChain.current) return saveChain.current;
+    const chain = (async () => {
+      try {
+        for (;;) {
+          const seqAtStart = changeSeq.current;
+          const ok = await performSave();
+          if (!ok) return false;
+          if (changeSeq.current === seqAtStart) {
+            setSaveState('saved');
+            return true;
+          }
+          // More edits arrived while saving — go around again.
+        }
+      } finally {
+        saveChain.current = null;
+      }
+    })();
+    saveChain.current = chain;
+    return chain;
+  }, [performSave]);
 
   // Flush any pending changes before leaving so the debounce window can't
   // swallow the user's last edits.
@@ -205,8 +232,15 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
     });
   }, []);
 
+  // Quilt undo/redo shortcuts must not fire while a dialog is open — a
+  // Ctrl+Z aimed at the draw canvas would silently rewind the quilt behind
+  // the modal (and autosave the loss).
+  const dialogOpenRef = useRef(false);
+  dialogOpenRef.current = editingFabric !== null || showLibrary;
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (dialogOpenRef.current) return;
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'TEXTAREA')) {
         return;
@@ -225,6 +259,12 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [undo, redo]);
+
+  // Undo/redo can restore a non-square grid while the Cut tool is active,
+  // which would leave every tap a no-op; fall back to painting.
+  useEffect(() => {
+    if (tool === 'cut' && data.cellShape !== 'square') setTool('paint');
+  }, [tool, data.cellShape]);
 
   // ---------------------------------------------------------------------
   // Painting and cutting (both stroke-based for drag + one undo per stroke)
@@ -424,12 +464,13 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
       >,
     ): boolean => {
       // Validate against the latest data BEFORE committing, so the guard
-      // (and its alert) stays out of the pure state updater.
+      // (and its alert) stays out of the pure state updater. gridCount is a
+      // closed-form check — never materializes a huge rejected grid.
       const current = latestRef.current.data;
-      const proposed = quiltGrid({ ...current, ...patch });
-      if (proposed.count > LIMITS.maxCells) {
+      const proposedCount = gridCount({ ...current, ...patch });
+      if (proposedCount > LIMITS.maxCells) {
         window.alert(
-          `That would make ${proposed.count} cells — too many. Try larger cells or a smaller quilt.`,
+          `That would make ${proposedCount} cells — too many. Try larger cells or a smaller quilt.`,
         );
         return false;
       }
@@ -452,10 +493,10 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
       const current = latestRef.current.data;
       if (shape === current.cellShape) return;
       const candidate = { ...current, cellShape: shape };
-      const grid = quiltGrid(candidate);
-      if (grid.count > LIMITS.maxCells) {
+      const count = gridCount(candidate);
+      if (count > LIMITS.maxCells) {
         window.alert(
-          `That shape would make ${grid.count} cells at this size — too many. Enlarge the cells first.`,
+          `That shape would make ${count} cells at this size — too many. Enlarge the cells first.`,
         );
         return;
       }
@@ -469,11 +510,10 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
       commitChange((prev) => ({
         ...prev,
         cellShape: shape,
-        cells: new Array(grid.count).fill(null),
+        cells: new Array(count).fill(null),
       }));
-      if (tool === 'cut' && shape !== 'square') setTool('paint');
     },
-    [commitChange, tool],
+    [commitChange],
   );
 
   const applyBackground = useCallback(
@@ -522,14 +562,25 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
           <section className="panel">
             <div className="panel-title-row">
               <h2>Fabrics</h2>
-              <button
-                type="button"
-                className="btn btn-small"
-                onClick={() => setEditingFabric('new')}
-                disabled={data.fabrics.length >= LIMITS.maxFabrics}
-              >
-                + Add
-              </button>
+              <span className="panel-title-actions">
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  onClick={() => setShowLibrary(true)}
+                  disabled={data.fabrics.length >= LIMITS.maxFabrics}
+                  title="Add a fabric from My Fabrics"
+                >
+                  📚 My fabrics
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  onClick={() => setEditingFabric('new')}
+                  disabled={data.fabrics.length >= LIMITS.maxFabrics}
+                >
+                  + Add
+                </button>
+              </span>
             </div>
             <ul className="fabric-list">
               {data.fabrics.map((fabric) => {
@@ -783,6 +834,15 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
           onClose={() => setEditingFabric(null)}
         />
       )}
+      {showLibrary && (
+        <LibraryDialog
+          onPick={(fields) => {
+            const added = saveFabric({ id: `f-${crypto.randomUUID().slice(0, 8)}`, ...fields });
+            if (added) setShowLibrary(false);
+          }}
+          onClose={() => setShowLibrary(false)}
+        />
+      )}
     </div>
   );
 }
@@ -921,7 +981,36 @@ function FabricDialog({
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
   const [drawing, setDrawing] = useState(false);
-  const photoInput = useRef<HTMLInputElement>(null);
+  const [libState, setLibState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [libError, setLibError] = useState<string | null>(null);
+  /** Opens the camera directly (capture="environment"). */
+  const cameraInput = useRef<HTMLInputElement>(null);
+  /** Opens the photo library / camera roll (no capture attribute). */
+  const libraryInput = useRef<HTMLInputElement>(null);
+
+  // A fabric edited after saving to the library can be saved again.
+  useEffect(() => {
+    setLibState((s) => (s === 'saved' ? 'idle' : s));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [name, color, pattern, image]);
+
+  async function saveToLibrary() {
+    if (photoBusy || libState === 'saving') return;
+    setLibState('saving');
+    setLibError(null);
+    try {
+      await api.saveLibraryFabric({
+        name: name.trim() || 'Unnamed fabric',
+        color,
+        pattern,
+        ...(image ? { image } : {}),
+      });
+      setLibState('saved');
+    } catch (err) {
+      setLibState('error');
+      setLibError(err instanceof Error ? err.message : 'Could not save to My Fabrics.');
+    }
+  }
   // Only dismiss when the press STARTED on the backdrop, so a drag that
   // begins inside the dialog (e.g. selecting text) can't close it.
   const pressStartedOnBackdrop = useRef(false);
@@ -945,7 +1034,8 @@ function FabricDialog({
     } finally {
       setPhotoBusy(false);
       // Allow re-selecting the same file
-      if (photoInput.current) photoInput.current.value = '';
+      if (cameraInput.current) cameraInput.current.value = '';
+      if (libraryInput.current) libraryInput.current.value = '';
     }
   }
 
@@ -993,11 +1083,20 @@ function FabricDialog({
           <div className="photo-section">
             <span className="photo-label">Photo or drawing of your fabric</span>
             <input
-              ref={photoInput}
+              ref={cameraInput}
               type="file"
               accept="image/*"
               capture="environment"
               className="visually-hidden-input"
+              aria-label="Take a photo with the camera"
+              onChange={(e) => handlePhotoFile(e.target.files?.[0])}
+            />
+            <input
+              ref={libraryInput}
+              type="file"
+              accept="image/*"
+              className="visually-hidden-input"
+              aria-label="Choose a photo from your library"
               onChange={(e) => handlePhotoFile(e.target.files?.[0])}
             />
             {image ? (
@@ -1007,10 +1106,18 @@ function FabricDialog({
                   <button
                     type="button"
                     className="btn btn-small"
-                    onClick={() => photoInput.current?.click()}
+                    onClick={() => cameraInput.current?.click()}
                     disabled={photoBusy}
                   >
-                    Retake
+                    📷 Retake
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-small"
+                    onClick={() => libraryInput.current?.click()}
+                    disabled={photoBusy}
+                  >
+                    🖼 Choose photo
                   </button>
                   <button
                     type="button"
@@ -1018,7 +1125,7 @@ function FabricDialog({
                     onClick={() => setDrawing(true)}
                     disabled={photoBusy}
                   >
-                    Draw on it
+                    🎨 Draw on it
                   </button>
                   <button
                     type="button"
@@ -1035,10 +1142,18 @@ function FabricDialog({
                 <button
                   type="button"
                   className="btn"
-                  onClick={() => photoInput.current?.click()}
+                  onClick={() => cameraInput.current?.click()}
                   disabled={photoBusy}
                 >
                   {photoBusy ? 'Preparing photo…' : '📷 Take a photo'}
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => libraryInput.current?.click()}
+                  disabled={photoBusy}
+                >
+                  🖼 From camera roll
                 </button>
                 <button
                   type="button"
@@ -1089,6 +1204,26 @@ function FabricDialog({
               </fieldset>
             </>
           )}
+          <div className="library-save-row">
+            <button
+              type="button"
+              className="btn btn-small"
+              onClick={saveToLibrary}
+              disabled={photoBusy || libState === 'saving' || libState === 'saved'}
+              title="Keep this fabric on your account to reuse in other quilts"
+            >
+              {libState === 'saving'
+                ? 'Saving…'
+                : libState === 'saved'
+                  ? '✓ In My Fabrics'
+                  : '♡ Save to My Fabrics'}
+            </button>
+            {libState === 'error' && (
+              <span className="form-error" role="alert">
+                {libError}
+              </span>
+            )}
+          </div>
           <div className="dialog-actions">
             {onDelete && (
               <button type="button" className="btn btn-danger" onClick={onDelete}>

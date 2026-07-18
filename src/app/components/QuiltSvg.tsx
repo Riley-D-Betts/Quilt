@@ -325,6 +325,72 @@ function PatternDef({ fabric, idPrefix }: { fabric: Fabric; idPrefix: string }) 
         />
       );
       break;
+    case 'gingham':
+      // Two translucent bands; where they cross, the overlap reads darker.
+      motif = (
+        <g fill={accent} opacity={0.85}>
+          <rect x={0} y={0} width={t / 2} height={t} opacity={0.45} />
+          <rect x={0} y={0} width={t} height={t / 2} opacity={0.45} />
+        </g>
+      );
+      break;
+    case 'plaid':
+      motif = (
+        <g stroke={accent}>
+          <line x1={t * 0.2} y1={0} x2={t * 0.2} y2={t} strokeWidth={t * 0.1} />
+          <line x1={t * 0.42} y1={0} x2={t * 0.42} y2={t} strokeWidth={t * 0.04} />
+          <line x1={0} y1={t * 0.2} x2={t} y2={t * 0.2} strokeWidth={t * 0.1} />
+          <line x1={0} y1={t * 0.42} x2={t} y2={t * 0.42} strokeWidth={t * 0.04} />
+        </g>
+      );
+      break;
+    case 'diamonds':
+      motif = (
+        <path
+          d={`M ${t / 2} ${t * 0.08} L ${t * 0.92} ${t / 2} L ${t / 2} ${t * 0.92} L ${t * 0.08} ${t / 2} Z`}
+          stroke={accent}
+          strokeWidth={t * 0.07}
+          fill="none"
+        />
+      );
+      break;
+    case 'stars':
+      motif = <path d={starPath(t / 2, t / 2, t * 0.3, t * 0.12)} fill={accent} />;
+      break;
+    case 'hearts':
+      motif = (
+        <path
+          d={`M ${t / 2} ${t * 0.72}
+              C ${t * 0.15} ${t * 0.45}, ${t * 0.28} ${t * 0.2}, ${t / 2} ${t * 0.38}
+              C ${t * 0.72} ${t * 0.2}, ${t * 0.85} ${t * 0.45}, ${t / 2} ${t * 0.72} Z`}
+          fill={accent}
+        />
+      );
+      break;
+    case 'leaves':
+      motif = (
+        <g fill={accent}>
+          <ellipse cx={t * 0.32} cy={t * 0.32} rx={t * 0.22} ry={t * 0.1} transform={`rotate(45 ${t * 0.32} ${t * 0.32})`} />
+          <ellipse cx={t * 0.72} cy={t * 0.72} rx={t * 0.22} ry={t * 0.1} transform={`rotate(-45 ${t * 0.72} ${t * 0.72})`} />
+        </g>
+      );
+      break;
+    case 'waves':
+      motif = (
+        <g stroke={accent} strokeWidth={t * 0.08} fill="none">
+          <path d={`M 0 ${t * 0.28} Q ${t * 0.25} ${t * 0.08} ${t * 0.5} ${t * 0.28} T ${t} ${t * 0.28}`} />
+          <path d={`M 0 ${t * 0.78} Q ${t * 0.25} ${t * 0.58} ${t * 0.5} ${t * 0.78} T ${t} ${t * 0.78}`} />
+        </g>
+      );
+      break;
+    case 'pinstripe':
+      motif = (
+        <g stroke={accent} strokeWidth={t * 0.05}>
+          <line x1={t * 0.25} y1={0} x2={t * 0.25} y2={t} />
+          <line x1={t * 0.75} y1={0} x2={t * 0.75} y2={t} />
+        </g>
+      );
+      break;
     case 'solid':
       break;
   }
@@ -373,6 +439,17 @@ export function FabricSwatch({
       />
     </svg>
   );
+}
+
+/** A five-pointed star path centered at (cx, cy). */
+function starPath(cx: number, cy: number, outer: number, inner: number): string {
+  const pts: string[] = [];
+  for (let i = 0; i < 10; i++) {
+    const r = i % 2 === 0 ? outer : inner;
+    const a = -Math.PI / 2 + (i * Math.PI) / 5;
+    pts.push(`${(cx + r * Math.cos(a)).toFixed(2)} ${(cy + r * Math.sin(a)).toFixed(2)}`);
+  }
+  return `M ${pts.join(' L ')} Z`;
 }
 
 /** Semi-transparent white on dark fabrics, semi-transparent black on light. */

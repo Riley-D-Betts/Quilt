@@ -12,12 +12,15 @@
  */
 import {
   buildGrid,
+  gridCount,
   isStampShape,
+  offsetPolygonBBox,
   splitPartCount,
   splitPartFraction,
   splitPartPolygons,
   CELL_SHAPES,
   SPLIT_KINDS,
+  type CellGeom,
   type CellShape,
   type GridGeom,
   type SplitKind,
@@ -34,6 +37,14 @@ export const PATTERNS = [
   'crosshatch',
   'flowers',
   'zigzag',
+  'gingham',
+  'plaid',
+  'diamonds',
+  'stars',
+  'hearts',
+  'leaves',
+  'waves',
+  'pinstripe',
 ] as const;
 
 export type PatternId = (typeof PATTERNS)[number];
@@ -113,6 +124,8 @@ export const LIMITS = {
   maxImageChars: 150_000,
   /** Whole-quilt JSON budget, kept well under D1's per-value limits. */
   maxDataBytes: 900_000,
+  /** Saved fabrics per account in the personal library. */
+  maxLibraryFabrics: 300,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -246,21 +259,35 @@ export function fabricTotals(d: QuiltData): TotalsReport {
     pieceCount: number;
   }
   const acc = new Map<string, Acc>();
-  const bump = (fabricId: string, areaSqIn: number, cutW: number, cutH: number) => {
+  /** cutW/cutH are FINAL cut sizes — seam allowance already included. */
+  const bump = (fabricId: string, areaSqIn: number, cutW: number, cutH: number, pieces = 1) => {
     let a = acc.get(fabricId);
     if (!a) {
       a = { areaSqIn: 0, finishedSqIn: 0, groups: new Map(), pieceCount: 0 };
       acc.set(fabricId, a);
     }
-    const w = round2(cutW + 2 * seam);
-    const h = round2(cutH + 2 * seam);
+    const w = round2(cutW);
+    const h = round2(cutH);
     a.finishedSqIn += areaSqIn;
-    a.areaSqIn += w * h;
-    a.pieceCount += 1;
+    a.areaSqIn += pieces * w * h;
+    a.pieceCount += pieces;
     const key = `${w}x${h}`;
     const g = a.groups.get(key);
-    if (g) g.count += 1;
-    else a.groups.set(key, { cutWIn: w, cutHIn: h, count: 1 });
+    if (g) g.count += pieces;
+    else a.groups.set(key, { cutWIn: w, cutHIn: h, count: pieces });
+  };
+
+  /**
+   * The true cut rectangle: the piece's cutting-orientation polygon offset
+   * outward by the seam allowance on EVERY side. For diagonal edges this is
+   * bigger than bbox+2*seam — e.g. a 6" half-square triangle needs a ~6.85"
+   * square, matching the quilter's "add 7/8" rule.
+   */
+  const cutBoxFor = (geom: CellGeom): { w: number; h: number } => {
+    if (geom.r !== undefined) {
+      return { w: 2 * geom.r + 2 * seam, h: 2 * geom.r + 2 * seam };
+    }
+    return offsetPolygonBBox(geom.cutPoints ?? geom.points!, seam);
   };
 
   let unassigned = 0;
@@ -272,7 +299,8 @@ export function fabricTotals(d: QuiltData): TotalsReport {
     if (cell === null) {
       unassigned++;
     } else if (typeof cell === 'string') {
-      bump(cell, geom.areaSqIn, geom.cutWIn, geom.cutHIn);
+      const box = cutBoxFor(geom);
+      bump(cell, geom.areaSqIn, box.w, box.h);
     } else {
       const polys = splitPartPolygons(cell.split, 0, 0, geom.cutWIn, geom.cutHIn);
       const fraction = splitPartFraction(cell.split);
@@ -282,7 +310,7 @@ export function fabricTotals(d: QuiltData): TotalsReport {
           unassigned++;
           continue;
         }
-        const box = polyBox(polys[p]);
+        const box = offsetPolygonBBox(polys[p], seam);
         bump(part, geom.areaSqIn * fraction, box.w, box.h);
       }
     }
@@ -299,21 +327,15 @@ export function fabricTotals(d: QuiltData): TotalsReport {
       ? d.fabrics.find((f) => f.id === d.backgroundFabricId)
       : undefined;
     if (bg) {
-      // The background is one big panel behind everything.
-      let a = acc.get(bg.id);
-      if (!a) {
-        a = { areaSqIn: 0, finishedSqIn: 0, groups: new Map(), pieceCount: 0 };
-        acc.set(bg.id, a);
-      }
-      const w = round2(grid.widthIn + 2 * seam);
-      const h = round2(grid.heightIn + 2 * seam);
-      a.finishedSqIn += bgSqIn;
-      a.areaSqIn += w * h;
-      a.pieceCount += 1;
-      const key = `${w}x${h}`;
-      const g = a.groups.get(key);
-      if (g) g.count += 1;
-      else a.groups.set(key, { cutWIn: w, cutHIn: h, count: 1 });
+      // The background panel: quilts wider than the bolt are pieced from
+      // bolt-width lengths, which is also how the yardage is estimated
+      // (one full-width panel per strip — a dash here would leave the
+      // biggest purchase of a stamp quilt without a number).
+      const panelW = grid.widthIn + 2 * seam;
+      const panelH = grid.heightIn + 2 * seam;
+      const panels = Math.max(1, Math.ceil(panelW / BOLT_WIDTH_IN));
+      // finished area is the true between-shapes area, not the purchase area
+      bump(bg.id, bgSqIn, Math.min(panelW, BOLT_WIDTH_IN), panelH, panels);
     } else {
       backgroundAssigned = false;
     }
@@ -351,20 +373,6 @@ function countPieces(d: QuiltData, grid: GridGeom): number {
     n += isSplitCell(cell) ? cell.parts.length : 1;
   }
   return n;
-}
-
-function polyBox(points: [number, number][]): { w: number; h: number } {
-  let minX = Infinity,
-    maxX = -Infinity,
-    minY = Infinity,
-    maxY = -Infinity;
-  for (const [x, y] of points) {
-    minX = Math.min(minX, x);
-    maxX = Math.max(maxX, x);
-    minY = Math.min(minY, y);
-    maxY = Math.max(maxY, y);
-  }
-  return { w: maxX - minX, h: maxY - minY };
 }
 
 /**
@@ -492,18 +500,22 @@ export function validateQuiltData(raw: unknown): QuiltData {
     throw new ValidationError('Unknown cell shape.');
   }
 
-  const grid = buildGrid({
+  const gridInput = {
     widthIn,
     heightIn,
     cellWidthIn,
     cellHeightIn,
     cellShape: cellShape as CellShape,
-  });
-  if (grid.count > LIMITS.maxCells) {
+  };
+  // Check the count BEFORE building the grid: buildGrid materializes every
+  // polygon, and a crafted 500k-cell request must 400, not exhaust memory.
+  const approxCount = gridCount(gridInput);
+  if (approxCount > LIMITS.maxCells) {
     throw new ValidationError(
-      `That combination makes ${grid.count} cells; the limit is ${LIMITS.maxCells}. Use larger cells or a smaller quilt.`,
+      `That combination makes ${approxCount} cells; the limit is ${LIMITS.maxCells}. Use larger cells or a smaller quilt.`,
     );
   }
+  const grid = buildGrid(gridInput);
 
   if (!Array.isArray(o.fabrics)) throw new ValidationError('fabrics must be an array.');
   if (o.fabrics.length > LIMITS.maxFabrics) {
@@ -516,26 +528,8 @@ export function validateQuiltData(raw: unknown): QuiltData {
     const id = str(fo.id, `fabrics[${i}].id`, 1, 40);
     if (seenIds.has(id)) throw new ValidationError(`Duplicate fabric id "${id}".`);
     seenIds.add(id);
-    const name = str(fo.name, `fabrics[${i}].name`, 1, LIMITS.maxFabricNameLen);
-    const color = str(fo.color, `fabrics[${i}].color`, 4, 7);
-    if (!/^#[0-9a-fA-F]{6}$/.test(color)) {
-      throw new ValidationError(`Fabric "${name}" has an invalid color.`);
-    }
-    const pattern = fo.pattern;
-    if (typeof pattern !== 'string' || !(PATTERNS as readonly string[]).includes(pattern)) {
-      throw new ValidationError(`Fabric "${name}" has an unknown pattern.`);
-    }
-    const fabric: Fabric = { id, name, color: color.toLowerCase(), pattern: pattern as PatternId };
-    if (fo.image !== undefined && fo.image !== null) {
-      if (typeof fo.image !== 'string' || !isFabricImage(fo.image)) {
-        throw new ValidationError(`Fabric "${name}" has an invalid photo.`);
-      }
-      if (fo.image.length > LIMITS.maxImageChars) {
-        throw new ValidationError(`Fabric "${name}"'s photo is too large.`);
-      }
-      fabric.image = fo.image;
-    }
-    return fabric;
+    const fields = validateFabricFields(fo, `fabrics[${i}]`);
+    return { id, ...fields };
   });
 
   let backgroundFabricId: string | null = null;
@@ -598,6 +592,40 @@ export function validateQuiltData(raw: unknown): QuiltData {
 }
 
 export class ValidationError extends Error {}
+
+/** The id-less fields of a fabric: name, color, pattern, optional image. */
+export type FabricFields = Omit<Fabric, 'id'>;
+
+/**
+ * Validate the id-less fields of a fabric (used both inside quilt data and
+ * for the personal fabric library, where the server assigns the id).
+ */
+export function validateFabricFields(raw: unknown, label = 'fabric'): FabricFields {
+  if (typeof raw !== 'object' || raw === null) {
+    throw new ValidationError(`${label} is invalid.`);
+  }
+  const fo = raw as Record<string, unknown>;
+  const name = str(fo.name, `${label}.name`, 1, LIMITS.maxFabricNameLen);
+  const color = str(fo.color, `${label}.color`, 4, 7);
+  if (!/^#[0-9a-fA-F]{6}$/.test(color)) {
+    throw new ValidationError(`Fabric "${name}" has an invalid color.`);
+  }
+  const pattern = fo.pattern;
+  if (typeof pattern !== 'string' || !(PATTERNS as readonly string[]).includes(pattern)) {
+    throw new ValidationError(`Fabric "${name}" has an unknown pattern.`);
+  }
+  const fields: FabricFields = { name, color: color.toLowerCase(), pattern: pattern as PatternId };
+  if (fo.image !== undefined && fo.image !== null) {
+    if (typeof fo.image !== 'string' || !isFabricImage(fo.image)) {
+      throw new ValidationError(`Fabric "${name}" has an invalid photo.`);
+    }
+    if (fo.image.length > LIMITS.maxImageChars) {
+      throw new ValidationError(`Fabric "${name}"'s photo is too large.`);
+    }
+    fields.image = fo.image;
+  }
+  return fields;
+}
 
 /** A base64 data URL in one of the formats the image pipeline can emit. */
 export function isFabricImage(s: string): boolean {

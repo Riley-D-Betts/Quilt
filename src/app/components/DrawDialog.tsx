@@ -41,7 +41,8 @@ interface DrawDialogProps {
 export function DrawDialog({ initialImage, onSave, onClose }: DrawDialogProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const undoStack = useRef<ImageData[]>([]);
-  const drawing = useRef(false);
+  /** The single pointer allowed to draw; a resting palm or second finger is ignored. */
+  const activePointer = useRef<number | null>(null);
   const lastPoint = useRef<{ x: number; y: number } | null>(null);
   const [color, setColor] = useState('#c0392b');
   const [brush, setBrush] = useState<number>(BRUSHES[1].size);
@@ -94,9 +95,10 @@ export function DrawDialog({ initialImage, onSave, onClose }: DrawDialogProps) {
 
   function down(e: React.PointerEvent) {
     e.preventDefault();
+    if (activePointer.current !== null) return; // one finger draws; others wait
+    activePointer.current = e.pointerId;
     canvasRef.current!.setPointerCapture(e.pointerId);
     pushUndo();
-    drawing.current = true;
     const p = canvasPoint(e);
     lastPoint.current = p;
     const c = ctx();
@@ -107,7 +109,7 @@ export function DrawDialog({ initialImage, onSave, onClose }: DrawDialogProps) {
   }
 
   function move(e: React.PointerEvent) {
-    if (!drawing.current || !lastPoint.current) return;
+    if (activePointer.current !== e.pointerId || !lastPoint.current) return;
     const p = canvasPoint(e);
     const c = ctx();
     c.strokeStyle = strokeColor();
@@ -121,8 +123,9 @@ export function DrawDialog({ initialImage, onSave, onClose }: DrawDialogProps) {
     lastPoint.current = p;
   }
 
-  function up() {
-    drawing.current = false;
+  function up(e: React.PointerEvent) {
+    if (activePointer.current !== e.pointerId) return;
+    activePointer.current = null;
     lastPoint.current = null;
   }
 
