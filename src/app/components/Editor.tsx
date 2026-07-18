@@ -26,11 +26,28 @@ interface EditorProps {
   onBack: () => void;
 }
 
+/**
+ * Quilt data plus its undo/redo stacks, updated atomically so a single
+ * state transition can never observe half-applied history.
+ */
+interface History {
+  data: QuiltData;
+  undo: QuiltData[];
+  redo: QuiltData[];
+}
+
+function pushCapped(stack: QuiltData[], snapshot: QuiltData): QuiltData[] {
+  return [...stack.slice(-(UNDO_LIMIT - 1)), snapshot];
+}
+
 export function Editor({ initialQuilt, onBack }: EditorProps) {
   const [name, setName] = useState(initialQuilt.name);
-  const [data, setData] = useState<QuiltData>(initialQuilt.data);
-  const [undoStack, setUndoStack] = useState<QuiltData[]>([]);
-  const [redoStack, setRedoStack] = useState<QuiltData[]>([]);
+  const [history, setHistory] = useState<History>({
+    data: initialQuilt.data,
+    undo: [],
+    redo: [],
+  });
+  const data = history.data;
   const [saveState, setSaveState] = useState<SaveState>('saved');
   const [saveError, setSaveError] = useState<string | null>(null);
   const [tool, setTool] = useState<Tool>('paint');
@@ -51,7 +68,7 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
   const changeSeq = useRef(0);
   const firstRender = useRef(true);
 
-  const doSave = useCallback(async () => {
+  const doSave = useCallback(async (): Promise<boolean> => {
     const seqAtStart = changeSeq.current;
     const { name, data } = latestRef.current;
     setSaveState('saving');
@@ -60,6 +77,7 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
       await api.updateQuilt(initialQuilt.id, { name: name.trim() || 'Untitled Quilt', data });
       // Only report "saved" if nothing changed while the request was in flight.
       setSaveState(changeSeq.current === seqAtStart ? 'saved' : 'dirty');
+      return true;
     } catch (err) {
       setSaveState('error');
       if (err instanceof ApiError && err.status === 401) {
@@ -69,8 +87,26 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
       } else {
         setSaveError(err instanceof Error ? err.message : 'Could not save. Please try again.');
       }
+      return false;
     }
   }, [initialQuilt.id]);
+
+  // Flush any pending changes before leaving so the debounce window can't
+  // swallow the user's last edits.
+  const saveStateRef = useRef(saveState);
+  saveStateRef.current = saveState;
+  const handleBack = useCallback(async () => {
+    if (saveStateRef.current !== 'saved') {
+      const ok = await doSave();
+      if (
+        !ok &&
+        !window.confirm('Your latest changes could not be saved. Leave anyway and lose them?')
+      ) {
+        return;
+      }
+    }
+    onBack();
+  }, [doSave, onBack]);
 
   useEffect(() => {
     if (firstRender.current) {
@@ -94,46 +130,37 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
   }, [saveState]);
 
   // ---------------------------------------------------------------------
-  // Undo / redo
+  // Undo / redo — every transition is one pure setHistory call
   // ---------------------------------------------------------------------
-  const pushUndo = useCallback((snapshot: QuiltData) => {
-    setUndoStack((stack) => [...stack.slice(-(UNDO_LIMIT - 1)), snapshot]);
-    setRedoStack([]);
-  }, []);
 
   /** Apply a structural change, recording the previous state for undo. */
-  const commitChange = useCallback(
-    (updater: (prev: QuiltData) => QuiltData) => {
-      setData((prev) => {
-        const next = updater(prev);
-        if (next !== prev) pushUndo(prev);
-        return next;
-      });
-    },
-    [pushUndo],
-  );
+  const commitChange = useCallback((updater: (prev: QuiltData) => QuiltData) => {
+    setHistory((h) => {
+      const next = updater(h.data);
+      if (next === h.data) return h;
+      return { data: next, undo: pushCapped(h.undo, h.data), redo: [] };
+    });
+  }, []);
 
   const undo = useCallback(() => {
-    setUndoStack((stack) => {
-      if (stack.length === 0) return stack;
-      const previous = stack[stack.length - 1];
-      setData((current) => {
-        setRedoStack((redo) => [...redo, current]);
-        return previous;
-      });
-      return stack.slice(0, -1);
+    setHistory((h) => {
+      if (h.undo.length === 0) return h;
+      return {
+        data: h.undo[h.undo.length - 1],
+        undo: h.undo.slice(0, -1),
+        redo: [...h.redo, h.data],
+      };
     });
   }, []);
 
   const redo = useCallback(() => {
-    setRedoStack((stack) => {
-      if (stack.length === 0) return stack;
-      const next = stack[stack.length - 1];
-      setData((current) => {
-        setUndoStack((undoS) => [...undoS.slice(-(UNDO_LIMIT - 1)), current]);
-        return next;
-      });
-      return stack.slice(0, -1);
+    setHistory((h) => {
+      if (h.redo.length === 0) return h;
+      return {
+        data: h.redo[h.redo.length - 1],
+        undo: pushCapped(h.undo, h.data),
+        redo: h.redo.slice(0, -1),
+      };
     });
   }, []);
 
@@ -163,19 +190,20 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
   // ---------------------------------------------------------------------
   const strokeActive = useRef(false);
   const strokeSnapshot = useRef<QuiltData | null>(null);
-  const strokeChanged = useRef(false);
 
   const paintValue = tool === 'erase' ? null : activeFabricId;
 
   const applyPaint = useCallback(
     (index: number) => {
-      setData((prev) => {
-        if (prev.cells[index] === paintValue) return prev;
-        if (paintValue !== null && !prev.fabrics.some((f) => f.id === paintValue)) return prev;
-        strokeChanged.current = true;
+      // Mid-stroke changes only touch `data`; the stroke's single undo
+      // snapshot is pushed once, at stroke end.
+      setHistory((h) => {
+        const prev = h.data;
+        if (prev.cells[index] === paintValue) return h;
+        if (paintValue !== null && !prev.fabrics.some((f) => f.id === paintValue)) return h;
         const cells = prev.cells.slice();
         cells[index] = paintValue;
-        return { ...prev, cells };
+        return { ...h, data: { ...prev, cells } };
       });
     },
     [paintValue],
@@ -185,7 +213,6 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
     (index: number) => {
       if (tool === 'paint' && !activeFabricId) return;
       strokeActive.current = true;
-      strokeChanged.current = false;
       strokeSnapshot.current = latestRef.current.data;
       applyPaint(index);
     },
@@ -202,11 +229,14 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
   const handleStrokeEnd = useCallback(() => {
     if (!strokeActive.current) return;
     strokeActive.current = false;
-    if (strokeChanged.current && strokeSnapshot.current) {
-      pushUndo(strokeSnapshot.current);
-    }
+    const snapshot = strokeSnapshot.current;
     strokeSnapshot.current = null;
-  }, [pushUndo]);
+    if (!snapshot) return;
+    setHistory((h) =>
+      // Painting replaced `data` with a new object iff anything changed.
+      h.data === snapshot ? h : { ...h, undo: pushCapped(h.undo, snapshot), redo: [] },
+    );
+  }, []);
 
   // ---------------------------------------------------------------------
   // Fabric management
@@ -273,22 +303,31 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
   }, [commitChange]);
 
   const applyDimensions = useCallback(
-    (patch: Partial<Pick<QuiltData, 'widthIn' | 'heightIn' | 'cellWidthIn' | 'cellHeightIn' | 'seamAllowanceIn'>>) => {
+    (
+      patch: Partial<
+        Pick<QuiltData, 'widthIn' | 'heightIn' | 'cellWidthIn' | 'cellHeightIn' | 'seamAllowanceIn'>
+      >,
+    ): boolean => {
+      // Validate against the latest data BEFORE committing, so the guard
+      // (and its alert) stays out of the pure state updater.
+      const current = latestRef.current.data;
+      const proposed = gridDims({ ...current, ...patch });
+      if (proposed.rows * proposed.cols > LIMITS.maxCells) {
+        window.alert(
+          `That would make a ${proposed.cols} × ${proposed.rows} grid — too many cells. Try larger cells or a smaller quilt.`,
+        );
+        return false;
+      }
       commitChange((prev) => {
         const next = { ...prev, ...patch };
         const oldDims = gridDims(prev);
         const newDims = gridDims(next);
-        if (newDims.rows * newDims.cols > LIMITS.maxCells) {
-          window.alert(
-            `That would make a ${newDims.cols} × ${newDims.rows} grid — too many cells. Try larger cells or a smaller quilt.`,
-          );
-          return prev;
-        }
         if (oldDims.rows !== newDims.rows || oldDims.cols !== newDims.cols) {
           next.cells = resizeCells(prev.cells, oldDims, newDims);
         }
         return next;
       });
+      return true;
     },
     [commitChange],
   );
@@ -299,7 +338,7 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
   return (
     <div className="editor-page">
       <header className="app-header editor-header no-print">
-        <button type="button" className="btn" onClick={onBack}>
+        <button type="button" className="btn" onClick={handleBack}>
           ← My Quilts
         </button>
         <input
@@ -307,6 +346,9 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
           value={name}
           maxLength={LIMITS.maxNameLen}
           onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          }}
           aria-label="Quilt name"
         />
         <div className="header-actions">
@@ -384,10 +426,20 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
               <h2>Tools</h2>
             </div>
             <div className="tool-buttons">
-              <button type="button" className="btn" onClick={undo} disabled={undoStack.length === 0}>
+              <button
+                type="button"
+                className="btn"
+                onClick={undo}
+                disabled={history.undo.length === 0}
+              >
                 ↶ Undo
               </button>
-              <button type="button" className="btn" onClick={redo} disabled={redoStack.length === 0}>
+              <button
+                type="button"
+                className="btn"
+                onClick={redo}
+                disabled={history.redo.length === 0}
+              >
                 ↷ Redo
               </button>
               <button
@@ -557,7 +609,8 @@ function DimField({
   value: number;
   min: number;
   max: number;
-  onCommit: (v: number) => void;
+  /** Returns false when the new value was rejected (e.g. too many cells). */
+  onCommit: (v: number) => boolean;
 }) {
   const [text, setText] = useState(String(value));
   useEffect(() => setText(String(value)), [value]);
@@ -569,8 +622,11 @@ function DimField({
       return;
     }
     const rounded = round2(parsed);
+    if (rounded !== value && !onCommit(rounded)) {
+      setText(String(value)); // rejected — show the real value again
+      return;
+    }
     setText(String(rounded));
-    if (rounded !== value) onCommit(rounded);
   }
 
   return (
@@ -615,6 +671,9 @@ function FabricDialog({
     fabric?.color ?? NEW_FABRIC_COLORS[Math.floor(Math.random() * NEW_FABRIC_COLORS.length)],
   );
   const [pattern, setPattern] = useState<PatternId>(fabric?.pattern ?? 'solid');
+  // Only dismiss when the press STARTED on the backdrop, so a drag that
+  // begins inside the dialog (e.g. selecting text) can't close it.
+  const pressStartedOnBackdrop = useRef(false);
 
   const preview: Fabric = {
     id: fabric?.id ?? 'preview',
@@ -634,7 +693,15 @@ function FabricDialog({
   }
 
   return (
-    <div className="dialog-backdrop" onClick={onClose}>
+    <div
+      className="dialog-backdrop"
+      onPointerDown={(e) => {
+        pressStartedOnBackdrop.current = e.target === e.currentTarget;
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && pressStartedOnBackdrop.current) onClose();
+      }}
+    >
       <div
         className="dialog"
         role="dialog"

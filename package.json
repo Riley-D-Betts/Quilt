@@ -5,6 +5,7 @@
   "description": "A web app for planning quilt patterns: paint a grid of fabric cells, then see exactly how much of each fabric you need.",
   "type": "module",
   "scripts": {
+    "predev": "vite build",
     "dev": "concurrently -n worker,client -c yellow,cyan \"wrangler dev --port 8787\" \"vite\"",
     "build": "vite build",
     "check": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.worker.json --noEmit",

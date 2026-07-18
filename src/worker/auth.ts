@@ -1,15 +1,23 @@
 /**
  * Password hashing and session management on top of Web Crypto + D1.
  *
- * Passwords: PBKDF2-SHA256, 100k iterations (Workers' WebCrypto cap),
- * per-user random salt, stored as `pbkdf2$<iterations>$<saltHex>$<hashHex>`.
+ * Passwords: PBKDF2-SHA256 with a per-user random salt, stored as
+ * `pbkdf2$<iterations>$<saltHex>$<hashHex>` (see PBKDF2_ITERATIONS below
+ * for how the count is chosen).
  *
  * Sessions: a 256-bit random token goes to the browser in an HttpOnly
  * cookie; only its SHA-256 hash is stored in D1, so a leaked database
  * cannot be replayed as a login.
  */
 
-const PBKDF2_ITERATIONS = 100_000;
+/**
+ * Chosen to fit comfortably inside the Workers Free plan's 10ms CPU budget
+ * (workerd caps PBKDF2 at 100k iterations, but that much hashing risks
+ * "exceeded CPU" 1102 errors on the free tier). Old hashes verify with the
+ * iteration count stored alongside them, so this can be raised later (e.g.
+ * on the paid plan) without breaking existing accounts.
+ */
+const PBKDF2_ITERATIONS = 50_000;
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 export const SESSION_COOKIE = 'quilt_session';
 
@@ -78,7 +86,18 @@ export async function createSession(db: D1Database, userId: number): Promise<str
   return token;
 }
 
-export async function getSessionUser(db: D1Database, token: string): Promise<SessionUser | null> {
+export interface SessionLookup {
+  user: SessionUser;
+  /**
+   * True when the sliding expiration was extended. The caller should re-send
+   * the session cookie too, so the browser's Max-Age slides along with the
+   * database expiry — otherwise active users get logged out N days after
+   * their first sign-in.
+   */
+  refreshed: boolean;
+}
+
+export async function getSessionUser(db: D1Database, token: string): Promise<SessionLookup | null> {
   if (!token) return null;
   const tokenHash = await sha256Hex(token);
   const row = await db
@@ -96,13 +115,15 @@ export async function getSessionUser(db: D1Database, token: string): Promise<Ses
     return null;
   }
   // Sliding expiration: extend when less than half the TTL remains.
+  let refreshed = false;
   if (row.expires_at - now < SESSION_TTL_SECONDS / 2) {
     await db
       .prepare('UPDATE sessions SET expires_at = ? WHERE token_hash = ?')
       .bind(now + SESSION_TTL_SECONDS, tokenHash)
       .run();
+    refreshed = true;
   }
-  return { id: row.id, email: row.email };
+  return { user: { id: row.id, email: row.email }, refreshed };
 }
 
 export async function deleteSession(db: D1Database, token: string): Promise<void> {
@@ -110,13 +131,26 @@ export async function deleteSession(db: D1Database, token: string): Promise<void
   await db.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(tokenHash).run();
 }
 
-export function sessionCookie(token: string, maxAgeSeconds = SESSION_TTL_SECONDS): string {
-  // `Secure` is fine in local dev too: browsers treat localhost as secure.
-  return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
+/**
+ * `secure` should reflect the request protocol: true in production (https),
+ * false under `wrangler dev` on http://localhost — Safari, unlike Chrome and
+ * Firefox, refuses to store Secure cookies from plain-http localhost.
+ */
+export function sessionCookie(
+  token: string,
+  secure: boolean,
+  maxAgeSeconds = SESSION_TTL_SECONDS,
+): string {
+  return (
+    `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}` +
+    (secure ? '; Secure' : '')
+  );
 }
 
-export function clearSessionCookie(): string {
-  return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+export function clearSessionCookie(secure: boolean): string {
+  return (
+    `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0` + (secure ? '; Secure' : '')
+  );
 }
 
 // ---------------------------------------------------------------------------

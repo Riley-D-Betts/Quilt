@@ -44,13 +44,16 @@ export const QuiltSvg = memo(function QuiltSvg({
   const interactive = Boolean(onCellPointerDown);
 
   function cellIndexFromEvent(e: React.PointerEvent<SVGSVGElement>): number | null {
+    // Map the pointer into viewBox coordinates via the SVG's own transform.
+    // (A naive getBoundingClientRect proportion breaks when CSS sizes the
+    // element to a different aspect ratio than the viewBox and
+    // preserveAspectRatio letterboxes the drawing.)
     const svg = e.currentTarget;
-    const rect = svg.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return null;
-    const x = ((e.clientX - rect.left) / rect.width) * width;
-    const y = ((e.clientY - rect.top) / rect.height) * height;
-    const col = Math.floor(x / cellW);
-    const row = Math.floor(y / cellH);
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return null;
+    const pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(ctm.inverse());
+    const col = Math.floor(pt.x / cellW);
+    const row = Math.floor(pt.y / cellH);
     if (col < 0 || col >= dims.cols || row < 0 || row >= dims.rows) return null;
     return row * dims.cols + col;
   }
