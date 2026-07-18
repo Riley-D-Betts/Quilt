@@ -28,8 +28,7 @@
     {
       "binding": "DB",
       "database_name": "quilt-planner-db",
-      // Replace with the id printed by: npx wrangler d1 create quilt-planner-db
-      "database_id": "REPLACE_WITH_YOUR_DATABASE_ID",
+      "database_id": "f1773a73-c3c2-4b7f-a5f0-c9b0dbba883c",
       "migrations_dir": "migrations"
     }
   ],
