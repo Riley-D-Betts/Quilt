@@ -4,7 +4,27 @@
  * Used by both the Worker (to validate incoming data) and the client
  * (to drive the editor and the fabric totals panel). Keep this file free
  * of DOM and Workers-specific APIs.
+ *
+ * Data model v2: a quilt has a cell shape (squares, triangles, hexagons,
+ * octagons-with-corner-squares, or "stamp" shapes on a background fabric),
+ * and square cells can be split into halves or quarters. v1 data (plain
+ * square grids) upgrades transparently via normalizeQuiltData.
  */
+import {
+  buildGrid,
+  isStampShape,
+  splitPartCount,
+  splitPartFraction,
+  splitPartPolygons,
+  CELL_SHAPES,
+  SPLIT_KINDS,
+  type CellShape,
+  type GridGeom,
+  type SplitKind,
+} from './geometry';
+
+export type { CellShape, SplitKind };
+export { CELL_SHAPES, SPLIT_KINDS, isStampShape };
 
 export const PATTERNS = [
   'solid',
@@ -25,29 +45,46 @@ export interface Fabric {
   color: string;
   pattern: PatternId;
   /**
-   * Optional photo of the real fabric as a small data URL (JPEG/PNG/WebP),
-   * produced client-side by processFabricPhoto. When set, cells render the
-   * photo instead of color+pattern.
+   * Optional image of the real fabric as a small data URL (JPEG/PNG/WebP) —
+   * a photo or a drawing made in the app. When set, cells render the image
+   * instead of color+pattern.
    */
   image?: string;
 }
 
+/** A split square cell: independent fabric per part. */
+export interface SplitCell {
+  split: SplitKind;
+  parts: (string | null)[];
+}
+
+/** One paintable cell: a fabric id, empty, or a split square. */
+export type Cell = string | null | SplitCell;
+
+export function isSplitCell(cell: Cell): cell is SplitCell {
+  return typeof cell === 'object' && cell !== null;
+}
+
 export interface QuiltData {
+  version: 2;
   /** Target quilt width in inches (the grid is derived from this). */
   widthIn: number;
-  /** Target quilt height in inches. */
   heightIn: number;
-  /** Finished (sewn) size of one cell, in inches. */
+  /**
+   * Cell size in inches. For triangles this is the triangle side; for
+   * hexagons the flat-to-flat width; for octagons the grid spacing —
+   * those shapes derive their height from the width.
+   */
   cellWidthIn: number;
   cellHeightIn: number;
   /** Seam allowance per side in inches; 0.25 is the quilting standard. */
   seamAllowanceIn: number;
+  cellShape: CellShape;
+  /** For stamp shapes (circle/pentagon/heptagon): the fabric behind them. */
+  backgroundFabricId: string | null;
   fabrics: Fabric[];
-  /**
-   * Row-major grid of fabric ids (or null for unassigned).
-   * Length must equal rows * cols from gridDims().
-   */
-  cells: (string | null)[];
+  /** Cells in the geometry module's index order (see buildGrid). */
+  cells: Cell[];
 }
 
 export interface QuiltSummary {
@@ -67,66 +104,95 @@ export const LIMITS = {
   maxQuiltIn: 240, // 20 feet is plenty even for a king with drop
   minCellIn: 0.5,
   maxCellIn: 60,
-  maxCells: 10_000, // 100x100 grid
+  maxCells: 10_000,
   maxFabrics: 60,
   maxNameLen: 80,
   maxFabricNameLen: 40,
   maxSeamIn: 2,
-  /** Per-fabric photo budget (data-URL characters; ~110KB of JPEG). */
+  /** Per-fabric image budget (data-URL characters; ~110KB of JPEG). */
   maxImageChars: 150_000,
   /** Whole-quilt JSON budget, kept well under D1's per-value limits. */
   maxDataBytes: 900_000,
 } as const;
 
 // ---------------------------------------------------------------------------
-// Grid geometry
+// Grid geometry (thin wrappers over the geometry module)
 // ---------------------------------------------------------------------------
 
 export interface GridDims {
   rows: number;
   cols: number;
-  /** Actual finished size implied by rows/cols x cell size. */
+  /** Total paintable cells (differs from rows*cols for some shapes). */
+  count: number;
   finishedWidthIn: number;
   finishedHeightIn: number;
 }
 
-/**
- * The grid is derived by fitting whole cells to the requested quilt size,
- * rounding to the nearest whole cell (minimum 1). The finished size is the
- * honest size the sewn quilt will end up: cells x cell size.
- */
-export function gridDims(d: {
-  widthIn: number;
-  heightIn: number;
-  cellWidthIn: number;
-  cellHeightIn: number;
-}): GridDims {
-  const cols = Math.max(1, Math.round(d.widthIn / d.cellWidthIn));
-  const rows = Math.max(1, Math.round(d.heightIn / d.cellHeightIn));
+export function quiltGrid(d: QuiltData): GridGeom {
+  return buildGrid({
+    widthIn: d.widthIn,
+    heightIn: d.heightIn,
+    cellWidthIn: d.cellWidthIn,
+    cellHeightIn: d.cellHeightIn,
+    cellShape: d.cellShape,
+  });
+}
+
+export function gridDims(d: QuiltData): GridDims {
+  const g = quiltGrid(d);
   return {
-    rows,
-    cols,
-    finishedWidthIn: round2(cols * d.cellWidthIn),
-    finishedHeightIn: round2(rows * d.cellHeightIn),
+    rows: g.rows,
+    cols: g.cols,
+    count: g.count,
+    finishedWidthIn: round2(g.widthIn),
+    finishedHeightIn: round2(g.heightIn),
   };
 }
 
 /**
- * Rebuild the cells array after a geometry change, preserving the existing
- * painting where the old and new grids overlap (anchored at the top-left).
+ * Rebuild the cells array after a geometry change, preserving the painting
+ * row by row where the old and new grids overlap. Octagon grids copy their
+ * octagon and corner-square sections independently.
  */
-export function resizeCells(
-  oldCells: (string | null)[],
-  oldDims: { rows: number; cols: number },
-  newDims: { rows: number; cols: number },
-): (string | null)[] {
-  const next: (string | null)[] = new Array(newDims.rows * newDims.cols).fill(null);
-  const copyRows = Math.min(oldDims.rows, newDims.rows);
-  const copyCols = Math.min(oldDims.cols, newDims.cols);
-  for (let r = 0; r < copyRows; r++) {
-    for (let c = 0; c < copyCols; c++) {
-      next[r * newDims.cols + c] = oldCells[r * oldDims.cols + c] ?? null;
+export function resizeCells(oldCells: Cell[], oldGrid: GridGeom, newGrid: GridGeom): Cell[] {
+  if (oldGrid.shape !== newGrid.shape) {
+    return new Array(newGrid.count).fill(null);
+  }
+  const next: Cell[] = new Array(newGrid.count).fill(null);
+  const copySection = (
+    oldLens: number[],
+    newLens: number[],
+    oldBase: number,
+    newBase: number,
+  ) => {
+    let oldOffset = oldBase;
+    let newOffset = newBase;
+    const rows = Math.min(oldLens.length, newLens.length);
+    for (let r = 0; r < rows; r++) {
+      const copy = Math.min(oldLens[r], newLens[r]);
+      for (let k = 0; k < copy; k++) {
+        next[newOffset + k] = oldCells[oldOffset + k] ?? null;
+      }
+      oldOffset += oldLens[r];
+      newOffset += newLens[r];
     }
+  };
+  if (oldGrid.shape === 'octagon') {
+    // rowLengths = [octagon rows..., filler rows...]
+    copySection(
+      oldGrid.rowLengths.slice(0, oldGrid.rows),
+      newGrid.rowLengths.slice(0, newGrid.rows),
+      0,
+      0,
+    );
+    copySection(
+      oldGrid.rowLengths.slice(oldGrid.rows),
+      newGrid.rowLengths.slice(newGrid.rows),
+      oldGrid.rows * oldGrid.cols,
+      newGrid.rows * newGrid.cols,
+    );
+  } else {
+    copySection(oldGrid.rowLengths, newGrid.rowLengths, 0, 0);
   }
   return next;
 }
@@ -138,22 +204,23 @@ export function resizeCells(
 /** Usable width of a standard quilting-cotton bolt, in inches. */
 export const BOLT_WIDTH_IN = 42;
 
+/** Pieces of one cut size (seam allowance already included). */
+export interface PieceGroup {
+  cutWIn: number;
+  cutHIn: number;
+  count: number;
+}
+
 export interface FabricTotal {
   fabric: Fabric;
-  cellCount: number;
-  /** Cut piece size including seam allowance on every side. */
-  cutWidthIn: number;
-  cutHeightIn: number;
+  pieceCount: number;
+  /** Distinct cut sizes for this fabric, largest first. */
+  groups: PieceGroup[];
   /** Finished area actually visible in the quilt. */
   finishedSqFt: number;
   /** Total fabric consumed by the cut pieces (what she must buy at minimum). */
   cutSqFt: number;
-  /**
-   * Practical yardage estimate off a standard bolt: pieces are cut in strips
-   * across the fabric width, so partial strips still consume a full strip's
-   * length. Rounded up to the nearest 1/8 yard. Null when a single piece is
-   * wider than the bolt.
-   */
+  /** Practical yardage estimate; null when a piece can't fit on the bolt. */
   yards: number | null;
 }
 
@@ -162,50 +229,169 @@ export interface TotalsReport {
   unassignedCells: number;
   totalCells: number;
   finishedQuiltSqFt: number;
+  /** Stamp shapes only: the background area between the shapes, in sq ft. */
+  backgroundSqFt: number | null;
+  /** Stamp shapes only: false when no background fabric has been chosen. */
+  backgroundAssigned: boolean;
 }
 
 export function fabricTotals(d: QuiltData): TotalsReport {
-  const dims = gridDims(d);
-  const counts = new Map<string, number>();
+  const grid = quiltGrid(d);
+  const seam = d.seamAllowanceIn;
+
+  interface Acc {
+    areaSqIn: number;
+    finishedSqIn: number;
+    groups: Map<string, PieceGroup>;
+    pieceCount: number;
+  }
+  const acc = new Map<string, Acc>();
+  const bump = (fabricId: string, areaSqIn: number, cutW: number, cutH: number) => {
+    let a = acc.get(fabricId);
+    if (!a) {
+      a = { areaSqIn: 0, finishedSqIn: 0, groups: new Map(), pieceCount: 0 };
+      acc.set(fabricId, a);
+    }
+    const w = round2(cutW + 2 * seam);
+    const h = round2(cutH + 2 * seam);
+    a.finishedSqIn += areaSqIn;
+    a.areaSqIn += w * h;
+    a.pieceCount += 1;
+    const key = `${w}x${h}`;
+    const g = a.groups.get(key);
+    if (g) g.count += 1;
+    else a.groups.set(key, { cutWIn: w, cutHIn: h, count: 1 });
+  };
+
   let unassigned = 0;
-  for (const cell of d.cells) {
+  let stampAreaSqIn = 0;
+  for (let i = 0; i < grid.cells.length; i++) {
+    const geom = grid.cells[i];
+    const cell = d.cells[i] ?? null;
+    stampAreaSqIn += geom.areaSqIn;
     if (cell === null) {
       unassigned++;
+    } else if (typeof cell === 'string') {
+      bump(cell, geom.areaSqIn, geom.cutWIn, geom.cutHIn);
     } else {
-      counts.set(cell, (counts.get(cell) ?? 0) + 1);
+      const polys = splitPartPolygons(cell.split, 0, 0, geom.cutWIn, geom.cutHIn);
+      const fraction = splitPartFraction(cell.split);
+      for (let p = 0; p < cell.parts.length; p++) {
+        const part = cell.parts[p];
+        if (part === null) {
+          unassigned++;
+          continue;
+        }
+        const box = polyBox(polys[p]);
+        bump(part, geom.areaSqIn * fraction, box.w, box.h);
+      }
     }
   }
 
-  const cutW = d.cellWidthIn + 2 * d.seamAllowanceIn;
-  const cutH = d.cellHeightIn + 2 * d.seamAllowanceIn;
+  const finishedSqIn = grid.widthIn * grid.heightIn;
+  const stamp = isStampShape(d.cellShape);
+  let backgroundSqFt: number | null = null;
+  let backgroundAssigned = true;
+  if (stamp) {
+    const bgSqIn = Math.max(0, finishedSqIn - stampAreaSqIn);
+    backgroundSqFt = round2(bgSqIn / 144);
+    const bg = d.backgroundFabricId
+      ? d.fabrics.find((f) => f.id === d.backgroundFabricId)
+      : undefined;
+    if (bg) {
+      // The background is one big panel behind everything.
+      let a = acc.get(bg.id);
+      if (!a) {
+        a = { areaSqIn: 0, finishedSqIn: 0, groups: new Map(), pieceCount: 0 };
+        acc.set(bg.id, a);
+      }
+      const w = round2(grid.widthIn + 2 * seam);
+      const h = round2(grid.heightIn + 2 * seam);
+      a.finishedSqIn += bgSqIn;
+      a.areaSqIn += w * h;
+      a.pieceCount += 1;
+      const key = `${w}x${h}`;
+      const g = a.groups.get(key);
+      if (g) g.count += 1;
+      else a.groups.set(key, { cutWIn: w, cutHIn: h, count: 1 });
+    } else {
+      backgroundAssigned = false;
+    }
+  }
 
   const totals: FabricTotal[] = d.fabrics.map((fabric) => {
-    const count = counts.get(fabric.id) ?? 0;
-    const finishedSqFt = (count * d.cellWidthIn * d.cellHeightIn) / 144;
-    const cutSqFt = (count * cutW * cutH) / 144;
+    const a = acc.get(fabric.id);
+    const groups = a
+      ? [...a.groups.values()].sort((g1, g2) => g2.cutWIn * g2.cutHIn - g1.cutWIn * g1.cutHIn)
+      : [];
     return {
       fabric,
-      cellCount: count,
-      cutWidthIn: round2(cutW),
-      cutHeightIn: round2(cutH),
-      finishedSqFt: round2(finishedSqFt),
-      cutSqFt: round2(cutSqFt),
-      yards: estimateYards(count, cutW, cutH),
+      pieceCount: a?.pieceCount ?? 0,
+      groups,
+      finishedSqFt: round2((a?.finishedSqIn ?? 0) / 144),
+      cutSqFt: round2((a?.areaSqIn ?? 0) / 144),
+      yards: estimateYardsForGroups(groups),
     };
   });
 
   return {
     totals,
     unassignedCells: unassigned,
-    totalCells: dims.rows * dims.cols,
-    finishedQuiltSqFt: round2((dims.finishedWidthIn * dims.finishedHeightIn) / 144),
+    totalCells: countPieces(d, grid),
+    finishedQuiltSqFt: round2(finishedSqIn / 144),
+    backgroundSqFt,
+    backgroundAssigned,
   };
 }
 
+function countPieces(d: QuiltData, grid: GridGeom): number {
+  let n = 0;
+  for (let i = 0; i < grid.count; i++) {
+    const cell = d.cells[i] ?? null;
+    n += isSplitCell(cell) ? cell.parts.length : 1;
+  }
+  return n;
+}
+
+function polyBox(points: [number, number][]): { w: number; h: number } {
+  let minX = Infinity,
+    maxX = -Infinity,
+    minY = Infinity,
+    maxY = -Infinity;
+  for (const [x, y] of points) {
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+  }
+  return { w: maxX - minX, h: maxY - minY };
+}
+
 /**
- * Estimate yards needed off a BOLT_WIDTH_IN-wide bolt, cutting pieces in
- * strips across the width of fabric. Rounds up to the nearest 1/8 yard.
+ * Estimate yards for a mixed set of cut sizes off a BOLT_WIDTH_IN-wide bolt:
+ * each size is cut in its own strips across the width of fabric; lengths
+ * add up and round up to the nearest 1/8 yard at the end.
  */
+export function estimateYardsForGroups(
+  groups: PieceGroup[],
+  boltWidthIn: number = BOLT_WIDTH_IN,
+): number | null {
+  let totalInches = 0;
+  for (const g of groups) {
+    if (g.count === 0) continue;
+    const fitA = piecesPerStrip(g.cutWIn, g.cutHIn, boltWidthIn);
+    const fitB = piecesPerStrip(g.cutHIn, g.cutWIn, boltWidthIn);
+    const best = [fitA, fitB]
+      .filter((f) => f.perStrip > 0)
+      .sort((a, b) => a.lengthNeeded(g.count) - b.lengthNeeded(g.count))[0];
+    if (!best) return null; // piece larger than the bolt either way
+    totalInches += best.lengthNeeded(g.count);
+  }
+  if (totalInches === 0) return 0;
+  return Math.ceil((totalInches / 36) * 8) / 8;
+}
+
+/** Single-size convenience wrapper (also used by tests). */
 export function estimateYards(
   pieceCount: number,
   cutWidthIn: number,
@@ -213,17 +399,10 @@ export function estimateYards(
   boltWidthIn: number = BOLT_WIDTH_IN,
 ): number | null {
   if (pieceCount === 0) return 0;
-  // Orient each piece so more fit per strip (rotating a square/rect is fine
-  // for solids and most quilting prints).
-  const fitA = piecesPerStrip(cutWidthIn, cutHeightIn, boltWidthIn);
-  const fitB = piecesPerStrip(cutHeightIn, cutWidthIn, boltWidthIn);
-  const best = [fitA, fitB]
-    .filter((f) => f.perStrip > 0)
-    .sort((a, b) => a.lengthNeeded(pieceCount) - b.lengthNeeded(pieceCount))[0];
-  if (!best) return null; // piece larger than the bolt either way
-  const inches = best.lengthNeeded(pieceCount);
-  const yards = inches / 36;
-  return Math.ceil(yards * 8) / 8;
+  return estimateYardsForGroups(
+    [{ cutWIn: cutWidthIn, cutHIn: cutHeightIn, count: pieceCount }],
+    boltWidthIn,
+  );
 }
 
 function piecesPerStrip(acrossIn: number, alongIn: number, boltWidthIn: number) {
@@ -242,7 +421,7 @@ export function round2(n: number): number {
 }
 
 // ---------------------------------------------------------------------------
-// Construction and validation
+// Construction, upgrade, and validation
 // ---------------------------------------------------------------------------
 
 export const DEFAULT_PALETTE: Omit<Fabric, 'id'>[] = [
@@ -256,26 +435,51 @@ export const DEFAULT_PALETTE: Omit<Fabric, 'id'>[] = [
 
 export function newQuiltData(): QuiltData {
   const base: Omit<QuiltData, 'cells'> = {
+    version: 2,
     widthIn: 60,
     heightIn: 72,
     cellWidthIn: 6,
     cellHeightIn: 6,
     seamAllowanceIn: 0.25,
+    cellShape: 'square',
+    backgroundFabricId: null,
     fabrics: DEFAULT_PALETTE.map((f, i) => ({ ...f, id: `f${i + 1}` })),
   };
-  const dims = gridDims(base);
-  return { ...base, cells: new Array(dims.rows * dims.cols).fill(null) };
+  const dims = gridDims({ ...base, cells: [] });
+  return { ...base, cells: new Array(dims.count).fill(null) };
 }
 
 /**
- * Validate untrusted quilt data (from the network). Returns a normalized
- * copy on success, or throws a ValidationError with a human-readable message.
+ * Upgrade stored data of any version to the current shape without
+ * validating it (validation is the server's job on write). Client code
+ * should run every fetched quilt through this.
+ */
+export function normalizeQuiltData(raw: any): QuiltData {
+  if (raw && typeof raw === 'object' && raw.version === 2) return raw as QuiltData;
+  return {
+    version: 2,
+    widthIn: raw?.widthIn ?? 60,
+    heightIn: raw?.heightIn ?? 72,
+    cellWidthIn: raw?.cellWidthIn ?? 6,
+    cellHeightIn: raw?.cellHeightIn ?? 6,
+    seamAllowanceIn: raw?.seamAllowanceIn ?? 0.25,
+    cellShape: 'square',
+    backgroundFabricId: null,
+    fabrics: Array.isArray(raw?.fabrics) ? raw.fabrics : [],
+    cells: Array.isArray(raw?.cells) ? raw.cells : [],
+  };
+}
+
+/**
+ * Validate untrusted quilt data (from the network). Accepts v1 or v2 input
+ * and returns a normalized v2 copy on success, or throws a ValidationError
+ * with a human-readable message.
  */
 export function validateQuiltData(raw: unknown): QuiltData {
   if (typeof raw !== 'object' || raw === null) {
     throw new ValidationError('Quilt data must be an object.');
   }
-  const o = raw as Record<string, unknown>;
+  const o = normalizeQuiltData(raw) as Record<string, any>;
 
   const widthIn = num(o.widthIn, 'widthIn', LIMITS.minQuiltIn, LIMITS.maxQuiltIn);
   const heightIn = num(o.heightIn, 'heightIn', LIMITS.minQuiltIn, LIMITS.maxQuiltIn);
@@ -283,11 +487,21 @@ export function validateQuiltData(raw: unknown): QuiltData {
   const cellHeightIn = num(o.cellHeightIn, 'cellHeightIn', LIMITS.minCellIn, LIMITS.maxCellIn);
   const seamAllowanceIn = num(o.seamAllowanceIn, 'seamAllowanceIn', 0, LIMITS.maxSeamIn);
 
-  const dims = gridDims({ widthIn, heightIn, cellWidthIn, cellHeightIn });
-  const cellCount = dims.rows * dims.cols;
-  if (cellCount > LIMITS.maxCells) {
+  const cellShape = o.cellShape;
+  if (typeof cellShape !== 'string' || !(CELL_SHAPES as readonly string[]).includes(cellShape)) {
+    throw new ValidationError('Unknown cell shape.');
+  }
+
+  const grid = buildGrid({
+    widthIn,
+    heightIn,
+    cellWidthIn,
+    cellHeightIn,
+    cellShape: cellShape as CellShape,
+  });
+  if (grid.count > LIMITS.maxCells) {
     throw new ValidationError(
-      `That combination makes a ${dims.cols}x${dims.rows} grid (${cellCount} cells); the limit is ${LIMITS.maxCells}. Use larger cells or a smaller quilt.`,
+      `That combination makes ${grid.count} cells; the limit is ${LIMITS.maxCells}. Use larger cells or a smaller quilt.`,
     );
   }
 
@@ -324,26 +538,68 @@ export function validateQuiltData(raw: unknown): QuiltData {
     return fabric;
   });
 
+  let backgroundFabricId: string | null = null;
+  if (o.backgroundFabricId !== null && o.backgroundFabricId !== undefined) {
+    if (typeof o.backgroundFabricId !== 'string' || !seenIds.has(o.backgroundFabricId)) {
+      throw new ValidationError('backgroundFabricId refers to an unknown fabric.');
+    }
+    backgroundFabricId = o.backgroundFabricId;
+  }
+
   if (!Array.isArray(o.cells)) throw new ValidationError('cells must be an array.');
-  if (o.cells.length !== cellCount) {
+  if (o.cells.length !== grid.count) {
     throw new ValidationError(
-      `cells has ${o.cells.length} entries but the grid needs ${cellCount}.`,
+      `cells has ${o.cells.length} entries but the grid needs ${grid.count}.`,
     );
   }
-  const cells: (string | null)[] = o.cells.map((c: unknown, i: number) => {
+  const cells: Cell[] = o.cells.map((c: unknown, i: number) => {
     if (c === null) return null;
-    if (typeof c !== 'string' || !seenIds.has(c)) {
-      throw new ValidationError(`Cell ${i} refers to an unknown fabric.`);
+    if (typeof c === 'string') {
+      if (!seenIds.has(c)) throw new ValidationError(`Cell ${i} refers to an unknown fabric.`);
+      return c;
     }
-    return c;
+    if (typeof c === 'object') {
+      if (cellShape !== 'square') {
+        throw new ValidationError('Split cells are only supported on square grids.');
+      }
+      const co = c as Record<string, unknown>;
+      const split = co.split;
+      if (typeof split !== 'string' || !(SPLIT_KINDS as readonly string[]).includes(split)) {
+        throw new ValidationError(`Cell ${i} has an unknown split.`);
+      }
+      const expected = splitPartCount(split as SplitKind);
+      if (!Array.isArray(co.parts) || co.parts.length !== expected) {
+        throw new ValidationError(`Cell ${i}'s split needs exactly ${expected} parts.`);
+      }
+      const parts = co.parts.map((p: unknown) => {
+        if (p === null) return null;
+        if (typeof p !== 'string' || !seenIds.has(p)) {
+          throw new ValidationError(`Cell ${i} refers to an unknown fabric.`);
+        }
+        return p;
+      });
+      return { split: split as SplitKind, parts };
+    }
+    throw new ValidationError(`Cell ${i} is invalid.`);
   });
 
-  return { widthIn, heightIn, cellWidthIn, cellHeightIn, seamAllowanceIn, fabrics, cells };
+  return {
+    version: 2,
+    widthIn,
+    heightIn,
+    cellWidthIn,
+    cellHeightIn,
+    seamAllowanceIn,
+    cellShape: cellShape as CellShape,
+    backgroundFabricId,
+    fabrics,
+    cells,
+  };
 }
 
 export class ValidationError extends Error {}
 
-/** A base64 data URL in one of the formats processFabricPhoto can emit. */
+/** A base64 data URL in one of the formats the image pipeline can emit. */
 export function isFabricImage(s: string): boolean {
   return /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/.test(s);
 }
