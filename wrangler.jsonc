@@ -1,0 +1,40 @@
+// Cloudflare Workers configuration for the Quilt Planner.
+// Docs: https://developers.cloudflare.com/workers/wrangler/configuration/
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "quilt-planner",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2025-06-01",
+
+  // Serve the app at the custom domain. Requires the rileybetts.xyz zone to
+  // exist in your Cloudflare account first (see README "Your own domain");
+  // deploying then creates the DNS record and TLS certificate automatically.
+  "routes": [
+    {
+      "pattern": "quilt.rileybetts.xyz",
+      "custom_domain": true
+    }
+  ],
+
+  // The built React app. `run_worker_first` makes /api/* hit the Worker even
+  // though `single-page-application` would otherwise answer with index.html.
+  "assets": {
+    "directory": "./dist/client",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "quilt-planner-db",
+      // Replace with the id printed by: npx wrangler d1 create quilt-planner-db
+      "database_id": "REPLACE_WITH_YOUR_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "observability": {
+    "enabled": true
+  }
+}
