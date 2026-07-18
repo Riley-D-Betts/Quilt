@@ -40,8 +40,13 @@ export type PatternId = string;
 export interface Fabric {
   id: string;
   name: string;
-  /** Base color as #rrggbb */
+  /** Base (background) color as #rrggbb */
   color: string;
+  /**
+   * Optional secondary color for the pattern motif, as #rrggbb. When absent
+   * the motif uses an automatic contrast tone derived from the base color.
+   */
+  color2?: string;
   pattern: PatternId;
   /**
    * Optional image of the real fabric as a small data URL (JPEG/PNG/WebP) —
@@ -605,6 +610,12 @@ export function validateFabricFields(raw: unknown, label = 'fabric'): FabricFiel
     throw new ValidationError(`Fabric "${name}" has an unknown pattern.`);
   }
   const fields: FabricFields = { name, color: color.toLowerCase(), pattern };
+  if (fo.color2 !== undefined && fo.color2 !== null) {
+    if (typeof fo.color2 !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(fo.color2)) {
+      throw new ValidationError(`Fabric "${name}" has an invalid pattern color.`);
+    }
+    fields.color2 = fo.color2.toLowerCase();
+  }
   if (fo.image !== undefined && fo.image !== null) {
     if (typeof fo.image !== 'string' || !isFabricImage(fo.image)) {
       throw new ValidationError(`Fabric "${name}" has an invalid photo.`);

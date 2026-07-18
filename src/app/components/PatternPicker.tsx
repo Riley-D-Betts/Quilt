@@ -17,10 +17,13 @@ const SHOW_LIMIT = 60;
 
 export function PatternPicker({
   color,
+  color2 = null,
   value,
   onChange,
 }: {
   color: string;
+  /** Secondary motif color; null = automatic contrast tone. */
+  color2?: string | null;
   value: string;
   onChange: (patternId: string) => void;
 }) {
@@ -69,13 +72,14 @@ export function PatternPicker({
       </div>
       <div className="pattern-grid">
         {selected && !selectedVisible && (
-          <PatternOption defn={selected} color={color} selected onPick={onChange} />
+          <PatternOption defn={selected} color={color} color2={color2} selected onPick={onChange} />
         )}
         {shown.map((defn) => (
           <PatternOption
             key={defn.id}
             defn={defn}
             color={color}
+            color2={color2}
             selected={defn.id === value}
             onPick={onChange}
           />
@@ -94,11 +98,13 @@ export function PatternPicker({
 function PatternOption({
   defn,
   color,
+  color2,
   selected,
   onPick,
 }: {
   defn: PatternDefn;
   color: string;
+  color2: string | null;
   selected: boolean;
   onPick: (id: string) => void;
 }) {
@@ -112,7 +118,13 @@ function PatternOption({
         onChange={() => onPick(defn.id)}
       />
       <FabricSwatch
-        fabric={{ id: `pk-${defn.id}`, name: defn.label, color, pattern: defn.id }}
+        fabric={{
+          id: `pk-${defn.id}`,
+          name: defn.label,
+          color,
+          ...(color2 ? { color2 } : {}),
+          pattern: defn.id,
+        }}
         idPrefix="pk"
         size={34}
       />

@@ -69,6 +69,7 @@ export function LibraryDialog({ onPick, onClose }: LibraryDialogProps) {
                     onPick({
                       name: fabric.name,
                       color: fabric.color,
+                      ...(fabric.color2 ? { color2: fabric.color2 } : {}),
                       pattern: fabric.pattern,
                       ...(fabric.image ? { image: fabric.image } : {}),
                     })

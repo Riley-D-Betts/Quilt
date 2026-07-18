@@ -704,6 +704,20 @@ h2 {
   overflow-y: auto;
 }
 
+.color2-field {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.auto-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
 /* ---------- my colors ---------- */
 
 .my-colors {

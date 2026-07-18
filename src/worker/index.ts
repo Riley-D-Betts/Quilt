@@ -222,16 +222,24 @@ app.delete('/api/quilts/:id', async (c) => {
 
 app.get('/api/fabrics', async (c) => {
   const rows = await c.env.DB.prepare(
-    `SELECT id, name, color, pattern, image FROM fabric_library
+    `SELECT id, name, color, color2, pattern, image FROM fabric_library
      WHERE user_id = ? ORDER BY created_at DESC`,
   )
     .bind(c.get('user').id)
-    .all<{ id: string; name: string; color: string; pattern: string; image: string | null }>();
+    .all<{
+      id: string;
+      name: string;
+      color: string;
+      color2: string | null;
+      pattern: string;
+      image: string | null;
+    }>();
   return c.json({
     fabrics: rows.results.map((r) => ({
       id: r.id,
       name: r.name,
       color: r.color,
+      ...(r.color2 ? { color2: r.color2 } : {}),
       pattern: r.pattern,
       ...(r.image ? { image: r.image } : {}),
     })),
@@ -258,9 +266,17 @@ app.post('/api/fabrics', async (c) => {
   }
   const id = crypto.randomUUID();
   await c.env.DB.prepare(
-    'INSERT INTO fabric_library (id, user_id, name, color, pattern, image) VALUES (?, ?, ?, ?, ?, ?)',
+    'INSERT INTO fabric_library (id, user_id, name, color, color2, pattern, image) VALUES (?, ?, ?, ?, ?, ?, ?)',
   )
-    .bind(id, userId, fields.name, fields.color, fields.pattern, fields.image ?? null)
+    .bind(
+      id,
+      userId,
+      fields.name,
+      fields.color,
+      fields.color2 ?? null,
+      fields.pattern,
+      fields.image ?? null,
+    )
     .run();
   return c.json({ fabric: { id, ...fields } }, 201);
 });
