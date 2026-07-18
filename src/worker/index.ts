@@ -22,6 +22,7 @@ import {
   LIMITS,
   ValidationError,
   newQuiltData,
+  validateColorFields,
   validateFabricFields,
   validateQuiltData,
 } from '../shared/quilt';
@@ -269,6 +270,61 @@ app.delete('/api/fabrics/:id', async (c) => {
     .bind(c.req.param('id'), c.get('user').id)
     .run();
   if (!result.meta.changes) return c.json({ error: 'Fabric not found.' }, 404);
+  return c.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Personal color palette (My Colors)
+// ---------------------------------------------------------------------------
+
+app.get('/api/colors', async (c) => {
+  const rows = await c.env.DB.prepare(
+    'SELECT id, color, name FROM color_library WHERE user_id = ? ORDER BY created_at DESC',
+  )
+    .bind(c.get('user').id)
+    .all<{ id: string; color: string; name: string }>();
+  return c.json({ colors: rows.results });
+});
+
+app.post('/api/colors', async (c) => {
+  const body = await readJson(c.req.raw);
+  let fields;
+  try {
+    fields = validateColorFields(body);
+  } catch (err) {
+    return validationResponse(c, err);
+  }
+  const userId = c.get('user').id;
+  const count = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM color_library WHERE user_id = ?')
+    .bind(userId)
+    .first<{ n: number }>();
+  if ((count?.n ?? 0) >= LIMITS.maxLibraryColors) {
+    return c.json(
+      { error: `Your color palette is full (${LIMITS.maxLibraryColors}). Remove some first.` },
+      400,
+    );
+  }
+  // Saving the same color twice is a no-op returning the existing entry.
+  const existing = await c.env.DB.prepare(
+    'SELECT id, color, name FROM color_library WHERE user_id = ? AND color = ?',
+  )
+    .bind(userId, fields.color)
+    .first<{ id: string; color: string; name: string }>();
+  if (existing) return c.json({ color: existing });
+  const id = crypto.randomUUID();
+  await c.env.DB.prepare(
+    'INSERT INTO color_library (id, user_id, color, name) VALUES (?, ?, ?, ?)',
+  )
+    .bind(id, userId, fields.color, fields.name)
+    .run();
+  return c.json({ color: { id, ...fields } }, 201);
+});
+
+app.delete('/api/colors/:id', async (c) => {
+  const result = await c.env.DB.prepare('DELETE FROM color_library WHERE id = ? AND user_id = ?')
+    .bind(c.req.param('id'), c.get('user').id)
+    .run();
+  if (!result.meta.changes) return c.json({ error: 'Color not found.' }, 404);
   return c.json({ ok: true });
 });
 

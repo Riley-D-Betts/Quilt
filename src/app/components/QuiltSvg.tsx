@@ -14,6 +14,7 @@ import {
   type QuiltData,
 } from '../../shared/quilt';
 import { hitTest, splitPartHit, splitPartPolygons, type CellGeom } from '../../shared/geometry';
+import { renderPatternTile } from './patternRender';
 
 /** Logical pixels per inch inside the SVG viewBox. */
 export const PX_PER_IN = 10;
@@ -265,140 +266,25 @@ function PatternDef({ fabric, idPrefix }: { fabric: Fabric; idPrefix: string }) 
       </pattern>
     );
   }
-  const accent = contrastOverlay(fabric.color);
-  const t = 14; // tile size in viewBox units
-
-  let motif: React.ReactNode = null;
-  switch (fabric.pattern) {
-    case 'dots':
-      motif = (
-        <>
-          <circle cx={t * 0.25} cy={t * 0.25} r={t * 0.13} fill={accent} />
-          <circle cx={t * 0.75} cy={t * 0.75} r={t * 0.13} fill={accent} />
-        </>
-      );
-      break;
-    case 'stripes':
-      motif = (
-        <path
-          d={`M ${-t / 4} ${t / 4} l ${t / 2} ${-t / 2} M 0 ${t} L ${t} 0 M ${t * 0.75} ${t * 1.25} l ${t / 2} ${-t / 2}`}
-          stroke={accent}
-          strokeWidth={t * 0.18}
-        />
-      );
-      break;
-    case 'checks':
-      motif = (
-        <>
-          <rect x={0} y={0} width={t / 2} height={t / 2} fill={accent} />
-          <rect x={t / 2} y={t / 2} width={t / 2} height={t / 2} fill={accent} />
-        </>
-      );
-      break;
-    case 'crosshatch':
-      motif = (
-        <path
-          d={`M 0 0 L ${t} ${t} M ${t} 0 L 0 ${t}`}
-          stroke={accent}
-          strokeWidth={t * 0.09}
-        />
-      );
-      break;
-    case 'flowers':
-      motif = (
-        <g fill={accent}>
-          <circle cx={t / 2} cy={t * 0.28} r={t * 0.12} />
-          <circle cx={t * 0.72} cy={t / 2} r={t * 0.12} />
-          <circle cx={t / 2} cy={t * 0.72} r={t * 0.12} />
-          <circle cx={t * 0.28} cy={t / 2} r={t * 0.12} />
-          <circle cx={t / 2} cy={t / 2} r={t * 0.09} fill={fabric.color} stroke={accent} strokeWidth={t * 0.03} />
-        </g>
-      );
-      break;
-    case 'zigzag':
-      motif = (
-        <path
-          d={`M 0 ${t * 0.65} L ${t * 0.25} ${t * 0.35} L ${t * 0.5} ${t * 0.65} L ${t * 0.75} ${t * 0.35} L ${t} ${t * 0.65}`}
-          stroke={accent}
-          strokeWidth={t * 0.1}
-          fill="none"
-        />
-      );
-      break;
-    case 'gingham':
-      // Two translucent bands; where they cross, the overlap reads darker.
-      motif = (
-        <g fill={accent} opacity={0.85}>
-          <rect x={0} y={0} width={t / 2} height={t} opacity={0.45} />
-          <rect x={0} y={0} width={t} height={t / 2} opacity={0.45} />
-        </g>
-      );
-      break;
-    case 'plaid':
-      motif = (
-        <g stroke={accent}>
-          <line x1={t * 0.2} y1={0} x2={t * 0.2} y2={t} strokeWidth={t * 0.1} />
-          <line x1={t * 0.42} y1={0} x2={t * 0.42} y2={t} strokeWidth={t * 0.04} />
-          <line x1={0} y1={t * 0.2} x2={t} y2={t * 0.2} strokeWidth={t * 0.1} />
-          <line x1={0} y1={t * 0.42} x2={t} y2={t * 0.42} strokeWidth={t * 0.04} />
-        </g>
-      );
-      break;
-    case 'diamonds':
-      motif = (
-        <path
-          d={`M ${t / 2} ${t * 0.08} L ${t * 0.92} ${t / 2} L ${t / 2} ${t * 0.92} L ${t * 0.08} ${t / 2} Z`}
-          stroke={accent}
-          strokeWidth={t * 0.07}
-          fill="none"
-        />
-      );
-      break;
-    case 'stars':
-      motif = <path d={starPath(t / 2, t / 2, t * 0.3, t * 0.12)} fill={accent} />;
-      break;
-    case 'hearts':
-      motif = (
-        <path
-          d={`M ${t / 2} ${t * 0.72}
-              C ${t * 0.15} ${t * 0.45}, ${t * 0.28} ${t * 0.2}, ${t / 2} ${t * 0.38}
-              C ${t * 0.72} ${t * 0.2}, ${t * 0.85} ${t * 0.45}, ${t / 2} ${t * 0.72} Z`}
-          fill={accent}
-        />
-      );
-      break;
-    case 'leaves':
-      motif = (
-        <g fill={accent}>
-          <ellipse cx={t * 0.32} cy={t * 0.32} rx={t * 0.22} ry={t * 0.1} transform={`rotate(45 ${t * 0.32} ${t * 0.32})`} />
-          <ellipse cx={t * 0.72} cy={t * 0.72} rx={t * 0.22} ry={t * 0.1} transform={`rotate(-45 ${t * 0.72} ${t * 0.72})`} />
-        </g>
-      );
-      break;
-    case 'waves':
-      motif = (
-        <g stroke={accent} strokeWidth={t * 0.08} fill="none">
-          <path d={`M 0 ${t * 0.28} Q ${t * 0.25} ${t * 0.08} ${t * 0.5} ${t * 0.28} T ${t} ${t * 0.28}`} />
-          <path d={`M 0 ${t * 0.78} Q ${t * 0.25} ${t * 0.58} ${t * 0.5} ${t * 0.78} T ${t} ${t * 0.78}`} />
-        </g>
-      );
-      break;
-    case 'pinstripe':
-      motif = (
-        <g stroke={accent} strokeWidth={t * 0.05}>
-          <line x1={t * 0.25} y1={0} x2={t * 0.25} y2={t} />
-          <line x1={t * 0.75} y1={0} x2={t * 0.75} y2={t} />
-        </g>
-      );
-      break;
-    case 'solid':
-      break;
+  const tile = renderPatternTile(fabric.pattern, fabric.color, contrastOverlay(fabric.color));
+  if (!tile) {
+    // Unknown or solid pattern id: a plain color tile keeps url(#...) fills valid.
+    return (
+      <pattern id={id} width={4} height={4} patternUnits="userSpaceOnUse">
+        <rect width={4} height={4} fill={fabric.color} />
+      </pattern>
+    );
   }
-
   return (
-    <pattern id={id} width={t} height={t} patternUnits="userSpaceOnUse">
-      <rect width={t} height={t} fill={fabric.color} />
-      {motif}
+    <pattern
+      id={id}
+      width={tile.size}
+      height={tile.size}
+      patternUnits="userSpaceOnUse"
+      patternTransform={tile.patternTransform}
+    >
+      <rect width={tile.size} height={tile.size} fill={fabric.color} />
+      {tile.node}
     </pattern>
   );
 }
@@ -439,17 +325,6 @@ export function FabricSwatch({
       />
     </svg>
   );
-}
-
-/** A five-pointed star path centered at (cx, cy). */
-function starPath(cx: number, cy: number, outer: number, inner: number): string {
-  const pts: string[] = [];
-  for (let i = 0; i < 10; i++) {
-    const r = i % 2 === 0 ? outer : inner;
-    const a = -Math.PI / 2 + (i * Math.PI) / 5;
-    pts.push(`${(cx + r * Math.cos(a)).toFixed(2)} ${(cy + r * Math.sin(a)).toFixed(2)}`);
-  }
-  return `M ${pts.join(' L ')} Z`;
 }
 
 /** Semi-transparent white on dark fabrics, semi-transparent black on light. */

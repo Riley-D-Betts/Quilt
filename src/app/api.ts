@@ -5,6 +5,7 @@ import {
   type FabricFields,
   type QuiltData,
   type QuiltSummary,
+  type SavedColor,
 } from '../shared/quilt';
 
 export class ApiError extends Error {
@@ -87,4 +88,12 @@ export const api = {
     request<{ fabric: Fabric }>('/api/fabrics', { method: 'POST', body: JSON.stringify(fields) }),
   deleteLibraryFabric: (id: string) =>
     request<{ ok: true }>(`/api/fabrics/${id}`, { method: 'DELETE' }),
+
+  listColors: () => request<{ colors: SavedColor[] }>('/api/colors'),
+  saveColor: (color: string, name = '') =>
+    request<{ color: SavedColor }>('/api/colors', {
+      method: 'POST',
+      body: JSON.stringify({ color, name }),
+    }),
+  deleteColor: (id: string) => request<{ ok: true }>(`/api/colors/${id}`, { method: 'DELETE' }),
 };

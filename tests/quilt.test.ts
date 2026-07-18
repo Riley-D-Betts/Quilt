@@ -14,6 +14,13 @@ import {
   type QuiltData,
 } from '../src/shared/quilt';
 import { buildGrid, gridCount, hitTest, offsetPolygonBBox, splitPartHit } from '../src/shared/geometry';
+import {
+  getPattern,
+  searchPatterns,
+  PATTERN_CATALOG,
+  PATTERN_CATEGORIES,
+} from '../src/shared/patternCatalog';
+import { validateColorFields } from '../src/shared/quilt';
 
 function makeQuilt(overrides: Partial<QuiltData> = {}): QuiltData {
   const base: QuiltData = {
@@ -523,6 +530,71 @@ describe('validateFabricFields (library fabrics)', () => {
     expect(() =>
       validateFabricFields({ name: 'X', color: '#aabbcc', pattern: 'solid', image: 'nope' }),
     ).toThrow(/photo/);
+  });
+});
+
+describe('pattern catalog', () => {
+  it('has at least 200 new patterns beyond the original fifteen', () => {
+    const legacy = PATTERN_CATALOG.filter((d) => d.family === 'legacy');
+    expect(legacy).toHaveLength(15);
+    expect(PATTERN_CATALOG.length - legacy.length).toBeGreaterThanOrEqual(200);
+  });
+
+  it('keeps every original pattern id valid', () => {
+    for (const id of ['solid', 'dots', 'stripes', 'checks', 'crosshatch', 'flowers', 'zigzag', 'gingham', 'plaid', 'diamonds', 'stars', 'hearts', 'leaves', 'waves', 'pinstripe']) {
+      expect(getPattern(id), id).toBeDefined();
+      expect(() =>
+        validateFabricFields({ name: 'X', color: '#aabbcc', pattern: id }),
+      ).not.toThrow();
+    }
+  });
+
+  it('has unique ids and a category tag on every entry', () => {
+    const ids = new Set(PATTERN_CATALOG.map((d) => d.id));
+    expect(ids.size).toBe(PATTERN_CATALOG.length);
+    for (const d of PATTERN_CATALOG) {
+      expect(
+        d.tags.some((t) => (PATTERN_CATEGORIES as readonly string[]).includes(t)),
+        `${d.id} needs a category tag`,
+      ).toBe(true);
+    }
+  });
+
+  it('search finds patterns by word, tag, and category', () => {
+    expect(searchPatterns('dots').length).toBeGreaterThan(10);
+    expect(searchPatterns('gingham').length).toBeGreaterThanOrEqual(5);
+    expect(searchPatterns('', 'floral').length).toBeGreaterThan(10);
+    expect(searchPatterns('large', 'stripes').every((d) => d.tags.includes('stripes'))).toBe(true);
+    expect(searchPatterns('zzzznope')).toHaveLength(0);
+    // multi-token: every token must match
+    expect(searchPatterns('tiny dots').every((d) => d.label.toLowerCase().includes('tiny'))).toBe(
+      true,
+    );
+  });
+
+  it('every catalog id passes fabric validation', () => {
+    for (const d of PATTERN_CATALOG) {
+      expect(() =>
+        validateFabricFields({ name: 'X', color: '#aabbcc', pattern: d.id }),
+      ).not.toThrow();
+    }
+  });
+});
+
+describe('validateColorFields (My Colors)', () => {
+  it('accepts and normalizes a color with an optional name', () => {
+    expect(validateColorFields({ color: '#AABBCC' })).toEqual({ color: '#aabbcc', name: '' });
+    expect(validateColorFields({ color: '#aabbcc', name: '  Rose Red  ' })).toEqual({
+      color: '#aabbcc',
+      name: 'Rose Red',
+    });
+  });
+
+  it('rejects malformed colors', () => {
+    expect(() => validateColorFields(null)).toThrow(ValidationError);
+    expect(() => validateColorFields({ color: 'red' })).toThrow(/rrggbb/);
+    expect(() => validateColorFields({ color: '#abc' })).toThrow(/rrggbb/);
+    expect(() => validateColorFields({ color: '#aabbcc', name: 42 })).toThrow(/name/);
   });
 });
 
