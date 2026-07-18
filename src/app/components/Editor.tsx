@@ -921,7 +921,10 @@ function FabricDialog({
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
   const [drawing, setDrawing] = useState(false);
-  const photoInput = useRef<HTMLInputElement>(null);
+  /** Opens the camera directly (capture="environment"). */
+  const cameraInput = useRef<HTMLInputElement>(null);
+  /** Opens the photo library / camera roll (no capture attribute). */
+  const libraryInput = useRef<HTMLInputElement>(null);
   // Only dismiss when the press STARTED on the backdrop, so a drag that
   // begins inside the dialog (e.g. selecting text) can't close it.
   const pressStartedOnBackdrop = useRef(false);
@@ -945,7 +948,8 @@ function FabricDialog({
     } finally {
       setPhotoBusy(false);
       // Allow re-selecting the same file
-      if (photoInput.current) photoInput.current.value = '';
+      if (cameraInput.current) cameraInput.current.value = '';
+      if (libraryInput.current) libraryInput.current.value = '';
     }
   }
 
@@ -993,11 +997,20 @@ function FabricDialog({
           <div className="photo-section">
             <span className="photo-label">Photo or drawing of your fabric</span>
             <input
-              ref={photoInput}
+              ref={cameraInput}
               type="file"
               accept="image/*"
               capture="environment"
               className="visually-hidden-input"
+              aria-label="Take a photo with the camera"
+              onChange={(e) => handlePhotoFile(e.target.files?.[0])}
+            />
+            <input
+              ref={libraryInput}
+              type="file"
+              accept="image/*"
+              className="visually-hidden-input"
+              aria-label="Choose a photo from your library"
               onChange={(e) => handlePhotoFile(e.target.files?.[0])}
             />
             {image ? (
@@ -1007,10 +1020,18 @@ function FabricDialog({
                   <button
                     type="button"
                     className="btn btn-small"
-                    onClick={() => photoInput.current?.click()}
+                    onClick={() => cameraInput.current?.click()}
                     disabled={photoBusy}
                   >
-                    Retake
+                    📷 Retake
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-small"
+                    onClick={() => libraryInput.current?.click()}
+                    disabled={photoBusy}
+                  >
+                    🖼 Choose photo
                   </button>
                   <button
                     type="button"
@@ -1018,7 +1039,7 @@ function FabricDialog({
                     onClick={() => setDrawing(true)}
                     disabled={photoBusy}
                   >
-                    Draw on it
+                    🎨 Draw on it
                   </button>
                   <button
                     type="button"
@@ -1035,10 +1056,18 @@ function FabricDialog({
                 <button
                   type="button"
                   className="btn"
-                  onClick={() => photoInput.current?.click()}
+                  onClick={() => cameraInput.current?.click()}
                   disabled={photoBusy}
                 >
                   {photoBusy ? 'Preparing photo…' : '📷 Take a photo'}
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => libraryInput.current?.click()}
+                  disabled={photoBusy}
+                >
+                  🖼 From camera roll
                 </button>
                 <button
                   type="button"
