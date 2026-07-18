@@ -9,7 +9,6 @@ import {
   resizeCells,
   round2,
   LIMITS,
-  PATTERNS,
   type Cell,
   type CellShape,
   type Fabric,
@@ -23,6 +22,8 @@ import { FabricSwatch, QuiltSvg } from './QuiltSvg';
 import { TotalsPanel } from './TotalsPanel';
 import { DrawDialog } from './DrawDialog';
 import { LibraryDialog } from './LibraryDialog';
+import { PatternPicker } from './PatternPicker';
+import { MyColors } from './MyColors';
 import { processFabricPhoto } from '../photo';
 
 type SaveState = 'saved' | 'dirty' | 'saving' | 'error';
@@ -1015,14 +1016,6 @@ function FabricDialog({
   // begins inside the dialog (e.g. selecting text) can't close it.
   const pressStartedOnBackdrop = useRef(false);
 
-  const preview: Fabric = {
-    id: fabric?.id ?? 'preview',
-    name: name || 'New fabric',
-    color,
-    pattern,
-    ...(image ? { image } : {}),
-  };
-
   async function handlePhotoFile(file: File | undefined) {
     if (!file) return;
     setPhotoBusy(true);
@@ -1182,26 +1175,8 @@ function FabricDialog({
                 Color
                 <input type="color" value={color} onChange={(e) => setColor(e.target.value)} />
               </label>
-              <fieldset className="pattern-picker">
-                <legend>Pattern</legend>
-                {PATTERNS.map((p) => (
-                  <label key={p} className={`pattern-option ${pattern === p ? 'selected' : ''}`}>
-                    <input
-                      type="radio"
-                      name="pattern"
-                      value={p}
-                      checked={pattern === p}
-                      onChange={() => setPattern(p)}
-                    />
-                    <FabricSwatch
-                      fabric={{ ...preview, id: `pv-${p}`, pattern: p, image: undefined }}
-                      idPrefix="dlg"
-                      size={34}
-                    />
-                    <span>{p}</span>
-                  </label>
-                ))}
-              </fieldset>
+              <MyColors color={color} onPick={setColor} />
+              <PatternPicker color={color} value={pattern} onChange={setPattern} />
             </>
           )}
           <div className="library-save-row">

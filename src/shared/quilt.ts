@@ -29,25 +29,13 @@ import {
 export type { CellShape, SplitKind };
 export { CELL_SHAPES, SPLIT_KINDS, isStampShape };
 
-export const PATTERNS = [
-  'solid',
-  'dots',
-  'stripes',
-  'checks',
-  'crosshatch',
-  'flowers',
-  'zigzag',
-  'gingham',
-  'plaid',
-  'diamonds',
-  'stars',
-  'hearts',
-  'leaves',
-  'waves',
-  'pinstripe',
-] as const;
+import { PATTERN_IDS } from './patternCatalog';
 
-export type PatternId = (typeof PATTERNS)[number];
+/** Every valid pattern id (the searchable catalog, ~250 entries). */
+export const PATTERNS: readonly string[] = PATTERN_IDS;
+const PATTERN_ID_SET = new Set(PATTERN_IDS);
+
+export type PatternId = string;
 
 export interface Fabric {
   id: string;
@@ -126,6 +114,8 @@ export const LIMITS = {
   maxDataBytes: 900_000,
   /** Saved fabrics per account in the personal library. */
   maxLibraryFabrics: 300,
+  /** Saved colors per account in the personal palette. */
+  maxLibraryColors: 200,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -611,10 +601,10 @@ export function validateFabricFields(raw: unknown, label = 'fabric'): FabricFiel
     throw new ValidationError(`Fabric "${name}" has an invalid color.`);
   }
   const pattern = fo.pattern;
-  if (typeof pattern !== 'string' || !(PATTERNS as readonly string[]).includes(pattern)) {
+  if (typeof pattern !== 'string' || !PATTERN_ID_SET.has(pattern)) {
     throw new ValidationError(`Fabric "${name}" has an unknown pattern.`);
   }
-  const fields: FabricFields = { name, color: color.toLowerCase(), pattern: pattern as PatternId };
+  const fields: FabricFields = { name, color: color.toLowerCase(), pattern };
   if (fo.image !== undefined && fo.image !== null) {
     if (typeof fo.image !== 'string' || !isFabricImage(fo.image)) {
       throw new ValidationError(`Fabric "${name}" has an invalid photo.`);
@@ -625,6 +615,30 @@ export function validateFabricFields(raw: unknown, label = 'fabric'): FabricFiel
     fields.image = fo.image;
   }
   return fields;
+}
+
+/** A saved color in the personal palette. */
+export interface SavedColor {
+  id: string;
+  color: string;
+  name: string;
+}
+
+/** Validate the fields of a saved color (My Colors library). */
+export function validateColorFields(raw: unknown): { color: string; name: string } {
+  if (typeof raw !== 'object' || raw === null) {
+    throw new ValidationError('Color is invalid.');
+  }
+  const o = raw as Record<string, unknown>;
+  if (typeof o.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(o.color)) {
+    throw new ValidationError('Color must look like #rrggbb.');
+  }
+  let name = '';
+  if (o.name !== undefined && o.name !== null) {
+    if (typeof o.name !== 'string') throw new ValidationError('Color name must be text.');
+    name = o.name.trim().slice(0, LIMITS.maxFabricNameLen);
+  }
+  return { color: o.color.toLowerCase(), name };
 }
 
 /** A base64 data URL in one of the formats the image pipeline can emit. */

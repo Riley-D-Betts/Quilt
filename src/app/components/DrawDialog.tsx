@@ -5,6 +5,7 @@
  * pipeline as fabric photos (a small data URL on the fabric).
  */
 import { useEffect, useRef, useState } from 'react';
+import { api } from '../api';
 import { LIMITS } from '../../shared/quilt';
 
 const CANVAS_PX = 256;
@@ -49,6 +50,17 @@ export function DrawDialog({ initialImage, onSave, onClose }: DrawDialogProps) {
   const [eraser, setEraser] = useState(false);
   const [canUndo, setCanUndo] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [savedColors, setSavedColors] = useState<string[]>([]);
+
+  // The user's saved palette (My Colors) joins the built-in swatches.
+  useEffect(() => {
+    api
+      .listColors()
+      .then((r) =>
+        setSavedColors(r.colors.map((c) => c.color).filter((c) => !PALETTE.includes(c))),
+      )
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current!;
@@ -174,7 +186,7 @@ export function DrawDialog({ initialImage, onSave, onClose }: DrawDialogProps) {
           onPointerCancel={up}
         />
         <div className="draw-colors" role="group" aria-label="Colors">
-          {PALETTE.map((c) => (
+          {[...PALETTE, ...savedColors].map((c) => (
             <button
               key={c}
               type="button"
