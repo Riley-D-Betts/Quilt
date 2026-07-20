@@ -86,6 +86,12 @@ export interface QuiltData {
   cellShape: CellShape;
   /** For stamp shapes (circle/pentagon/heptagon): the fabric behind them. */
   backgroundFabricId: string | null;
+  /** Show seam grid lines in the editor and print view (default true). */
+  showGridLines: boolean;
+  /** Fabric for the border ring around the quilt; null = no border. */
+  borderFabricId: string | null;
+  /** Border width in inches (used only when borderFabricId is set). */
+  borderWidthIn: number;
   fabrics: Fabric[];
   /** Cells in the geometry module's index order (see buildGrid). */
   cells: Cell[];
@@ -113,6 +119,8 @@ export const LIMITS = {
   maxNameLen: 80,
   maxFabricNameLen: 40,
   maxSeamIn: 2,
+  minBorderIn: 0.5,
+  maxBorderIn: 12,
   /** Per-fabric image budget (data-URL characters; ~110KB of JPEG). */
   maxImageChars: 150_000,
   /** Whole-quilt JSON budget, kept well under D1's per-value limits. */
@@ -336,6 +344,21 @@ export function fabricTotals(d: QuiltData): TotalsReport {
     }
   }
 
+  // Border ring: two side strips the height of the quilt center, plus
+  // top/bottom strips spanning the full bordered width (butted corners,
+  // the standard construction).
+  const borderFabric = d.borderFabricId
+    ? d.fabrics.find((f) => f.id === d.borderFabricId)
+    : undefined;
+  const bw = borderFabric ? d.borderWidthIn : 0;
+  if (borderFabric && bw > 0) {
+    const ringSqIn = (grid.widthIn + 2 * bw) * (grid.heightIn + 2 * bw) - finishedSqIn;
+    // Half the ring's finished area per strip pair keeps the totals honest.
+    bump(borderFabric.id, ringSqIn / 2, bw + 2 * seam, grid.heightIn + 2 * seam, 2);
+    bump(borderFabric.id, ringSqIn / 2, grid.widthIn + 2 * bw + 2 * seam, bw + 2 * seam, 2);
+  }
+  const finishedWithBorderSqIn = (grid.widthIn + 2 * bw) * (grid.heightIn + 2 * bw);
+
   const totals: FabricTotal[] = d.fabrics.map((fabric) => {
     const a = acc.get(fabric.id);
     const groups = a
@@ -355,7 +378,7 @@ export function fabricTotals(d: QuiltData): TotalsReport {
     totals,
     unassignedCells: unassigned,
     totalCells: countPieces(d, grid),
-    finishedQuiltSqFt: round2(finishedSqIn / 144),
+    finishedQuiltSqFt: round2(finishedWithBorderSqIn / 144),
     backgroundSqFt,
     backgroundAssigned,
   };
@@ -446,10 +469,20 @@ export function newQuiltData(): QuiltData {
     seamAllowanceIn: 0.25,
     cellShape: 'square',
     backgroundFabricId: null,
+    showGridLines: true,
+    borderFabricId: null,
+    borderWidthIn: 3,
     fabrics: DEFAULT_PALETTE.map((f, i) => ({ ...f, id: `f${i + 1}` })),
   };
   const dims = gridDims({ ...base, cells: [] });
   return { ...base, cells: new Array(dims.count).fill(null) };
+}
+
+/** Finished quilt size in inches, including the border ring when present. */
+export function finishedQuiltSize(d: QuiltData): { widthIn: number; heightIn: number } {
+  const g = quiltGrid(d);
+  const b = d.borderFabricId ? d.borderWidthIn : 0;
+  return { widthIn: round2(g.widthIn + 2 * b), heightIn: round2(g.heightIn + 2 * b) };
 }
 
 /**
@@ -458,7 +491,16 @@ export function newQuiltData(): QuiltData {
  * should run every fetched quilt through this.
  */
 export function normalizeQuiltData(raw: any): QuiltData {
-  if (raw && typeof raw === 'object' && raw.version === 2) return raw as QuiltData;
+  if (raw && typeof raw === 'object' && raw.version === 2) {
+    // Fields added after v2 shipped get defaults on older v2 rows.
+    const v2 = raw as QuiltData;
+    return {
+      ...v2,
+      showGridLines: v2.showGridLines !== false,
+      borderFabricId: v2.borderFabricId ?? null,
+      borderWidthIn: v2.borderWidthIn ?? 3,
+    };
+  }
   return {
     version: 2,
     widthIn: raw?.widthIn ?? 60,
@@ -468,6 +510,9 @@ export function normalizeQuiltData(raw: any): QuiltData {
     seamAllowanceIn: raw?.seamAllowanceIn ?? 0.25,
     cellShape: 'square',
     backgroundFabricId: null,
+    showGridLines: true,
+    borderFabricId: null,
+    borderWidthIn: 3,
     fabrics: Array.isArray(raw?.fabrics) ? raw.fabrics : [],
     cells: Array.isArray(raw?.cells) ? raw.cells : [],
   };
@@ -535,6 +580,19 @@ export function validateQuiltData(raw: unknown): QuiltData {
     backgroundFabricId = o.backgroundFabricId;
   }
 
+  const showGridLines = o.showGridLines !== false;
+  let borderFabricId: string | null = null;
+  if (o.borderFabricId !== null && o.borderFabricId !== undefined) {
+    if (typeof o.borderFabricId !== 'string' || !seenIds.has(o.borderFabricId)) {
+      throw new ValidationError('borderFabricId refers to an unknown fabric.');
+    }
+    borderFabricId = o.borderFabricId;
+  }
+  const borderWidthIn =
+    o.borderWidthIn === undefined || o.borderWidthIn === null
+      ? 3
+      : num(o.borderWidthIn, 'borderWidthIn', LIMITS.minBorderIn, LIMITS.maxBorderIn);
+
   if (!Array.isArray(o.cells)) throw new ValidationError('cells must be an array.');
   if (o.cells.length !== grid.count) {
     throw new ValidationError(
@@ -581,6 +639,9 @@ export function validateQuiltData(raw: unknown): QuiltData {
     seamAllowanceIn,
     cellShape: cellShape as CellShape,
     backgroundFabricId,
+    showGridLines,
+    borderFabricId,
+    borderWidthIn,
     fabrics,
     cells,
   };

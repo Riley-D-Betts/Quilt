@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
-import { gridDims, type QuiltSummary } from '../../shared/quilt';
+import { finishedQuiltSize, gridDims, type QuiltSummary } from '../../shared/quilt';
 import { QuiltSvg } from './QuiltSvg';
 
 interface QuiltListProps {
@@ -108,6 +108,7 @@ export function QuiltList({ email, onOpen, onSignOut, onError }: QuiltListProps)
 
           {quilts.map((quilt) => {
             const dims = gridDims(quilt.data);
+            const finished = finishedQuiltSize(quilt.data);
             return (
               <div key={quilt.id} className="quilt-card">
                 <button
@@ -126,7 +127,7 @@ export function QuiltList({ email, onOpen, onSignOut, onError }: QuiltListProps)
                 <div className="quilt-card-body">
                   <h2>{quilt.name}</h2>
                   <p className="muted">
-                    {dims.finishedWidthIn}&Prime; × {dims.finishedHeightIn}&Prime; ·{' '}
+                    {finished.widthIn}&Prime; × {finished.heightIn}&Prime; ·{' '}
                     {quilt.data.cellShape === 'square'
                       ? `${dims.cols} × ${dims.rows} cells`
                       : `${dims.count} pieces`}

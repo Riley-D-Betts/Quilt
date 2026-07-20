@@ -40,8 +40,15 @@ export const QuiltSvg = memo(function QuiltSvg({
   onPointerUp,
 }: QuiltSvgProps) {
   const grid = useMemo(() => quiltGrid(data), [data]);
-  const width = grid.widthIn * PX_PER_IN;
-  const height = grid.heightIn * PX_PER_IN;
+  // Border ring around the quilt center (0 when no border fabric chosen).
+  const borderIn = data.borderFabricId ? data.borderWidthIn : 0;
+  const bPx = borderIn * PX_PER_IN;
+  const gridW = grid.widthIn * PX_PER_IN;
+  const gridH = grid.heightIn * PX_PER_IN;
+  const width = gridW + 2 * bPx;
+  const height = gridH + 2 * bPx;
+  // The quilt's own setting AND the caller's prop both have to allow lines.
+  const gridLines = showGridLines && data.showGridLines !== false;
 
   const fabricById = useMemo(() => {
     const m = new Map<string, Fabric>();
@@ -63,8 +70,8 @@ export const QuiltSvg = memo(function QuiltSvg({
     const ctm = svg.getScreenCTM();
     if (!ctm) return null;
     const pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(ctm.inverse());
-    const xIn = pt.x / PX_PER_IN;
-    const yIn = pt.y / PX_PER_IN;
+    const xIn = pt.x / PX_PER_IN - borderIn; // border offsets the grid
+    const yIn = pt.y / PX_PER_IN - borderIn;
     const index = hitTest(grid, xIn, yIn, {
       widthIn: data.widthIn,
       heightIn: data.heightIn,
@@ -128,25 +135,49 @@ export const QuiltSvg = memo(function QuiltSvg({
         </pattern>
       </defs>
 
-      {stamp && (
-        <rect
-          x={0}
-          y={0}
-          width={width}
-          height={height}
-          fill={fillFor(data.backgroundFabricId)}
+      {borderIn > 0 && (
+        <path
+          d={`M 0 0 H ${width} V ${height} H 0 Z M ${bPx} ${bPx} H ${width - bPx} V ${height - bPx} H ${bPx} Z`}
+          fillRule="evenodd"
+          fill={fillFor(data.borderFabricId)}
+          stroke={gridLines ? CELL_STROKE : 'none'}
+          strokeWidth={gridLines ? 0.6 : 0}
         />
       )}
 
-      {grid.cells.map((geom) => (
-        <CellShapeView
-          key={geom.index}
-          geom={geom}
-          cell={data.cells[geom.index] ?? null}
-          fillFor={fillFor}
-          showGridLines={showGridLines}
-        />
-      ))}
+      <g transform={bPx ? `translate(${bPx} ${bPx})` : undefined}>
+        {stamp && (
+          <rect
+            x={0}
+            y={0}
+            width={gridW}
+            height={gridH}
+            fill={fillFor(data.backgroundFabricId)}
+          />
+        )}
+
+        {grid.cells.map((geom) => (
+          <CellShapeView
+            key={geom.index}
+            geom={geom}
+            cell={data.cells[geom.index] ?? null}
+            fillFor={fillFor}
+            showGridLines={gridLines}
+          />
+        ))}
+
+        {borderIn === 0 || gridLines ? (
+          <rect
+            x={0}
+            y={0}
+            width={gridW}
+            height={gridH}
+            fill="none"
+            stroke="#3c2a21"
+            strokeWidth={borderIn > 0 ? 0.8 : 1.5}
+          />
+        ) : null}
+      </g>
 
       <rect
         x={0}

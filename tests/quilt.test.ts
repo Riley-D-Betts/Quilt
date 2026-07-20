@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   estimateYards,
   fabricTotals,
+  finishedQuiltSize,
   gridDims,
   newQuiltData,
   normalizeQuiltData,
@@ -32,6 +33,9 @@ function makeQuilt(overrides: Partial<QuiltData> = {}): QuiltData {
     seamAllowanceIn: 0.25,
     cellShape: 'square',
     backgroundFabricId: null,
+    showGridLines: true,
+    borderFabricId: null,
+    borderWidthIn: 3,
     fabrics: [
       { id: 'red', name: 'Red', color: '#aa0000', pattern: 'solid' },
       { id: 'blue', name: 'Blue', color: '#0000aa', pattern: 'dots' },
@@ -549,6 +553,53 @@ describe('validateFabricFields (library fabrics)', () => {
       cells: ['red', null, null, null],
     });
     expect(validateQuiltData(q).fabrics[0].color2).toBe('#ffffff');
+  });
+});
+
+describe('border and grid lines', () => {
+  it('adds butted border strips to the totals and grows the finished size', () => {
+    // 12x12 center with a 3" blue border, seam 0.25
+    const q = makeQuilt({ borderFabricId: 'blue', borderWidthIn: 3, cells: [null, null, null, null] });
+    const report = fabricTotals(q);
+    const blue = report.totals.find((t) => t.fabric.id === 'blue')!;
+    expect(blue.pieceCount).toBe(4);
+    // sides: 2 x (3.5 x 12.5); top/bottom: 2 x (18.5 x 3.5)
+    expect(blue.groups.map((g) => `${g.cutWIn}x${g.cutHIn}x${g.count}`).sort()).toEqual(
+      ['18.5x3.5x2', '3.5x12.5x2'].sort(),
+    );
+    // ring finished area: 18^2 - 12^2 = 180 sq in
+    expect(blue.finishedSqFt).toBeCloseTo(180 / 144, 2);
+    expect(blue.yards).not.toBeNull();
+    // finished quilt includes the border: 18x18
+    expect(report.finishedQuiltSqFt).toBeCloseTo(324 / 144, 2);
+    const size = finishedQuiltSize(q);
+    expect(size).toEqual({ widthIn: 18, heightIn: 18 });
+  });
+
+  it('no border means no strips and the plain finished size', () => {
+    const q = makeQuilt();
+    expect(finishedQuiltSize(q)).toEqual({ widthIn: 12, heightIn: 12 });
+    expect(fabricTotals(q).finishedQuiltSqFt).toBe(1);
+  });
+
+  it('validates border fields and grid-line flag', () => {
+    expect(() => validateQuiltData(makeQuilt({ borderFabricId: 'ghost' }))).toThrow(/border/);
+    expect(() => validateQuiltData(makeQuilt({ borderWidthIn: 99 }))).toThrow(/borderWidthIn/);
+    const v = validateQuiltData(makeQuilt({ showGridLines: false, borderFabricId: 'red', borderWidthIn: 2.5 }));
+    expect(v.showGridLines).toBe(false);
+    expect(v.borderFabricId).toBe('red');
+    expect(v.borderWidthIn).toBe(2.5);
+  });
+
+  it('older v2 rows without the new fields get defaults', () => {
+    const legacyV2: any = { ...makeQuilt() };
+    delete legacyV2.showGridLines;
+    delete legacyV2.borderFabricId;
+    delete legacyV2.borderWidthIn;
+    const up = normalizeQuiltData(legacyV2);
+    expect(up.showGridLines).toBe(true);
+    expect(up.borderFabricId).toBeNull();
+    expect(up.borderWidthIn).toBe(3);
   });
 });
 

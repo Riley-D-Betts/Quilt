@@ -524,6 +524,13 @@ h2 {
   grid-column: 1 / -1;
 }
 
+.check-row-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+}
+
 .settings-grid .hint {
   grid-column: 1 / -1;
 }

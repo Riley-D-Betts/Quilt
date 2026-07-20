@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError } from '../api';
 import {
   fabricTotals,
+  finishedQuiltSize,
   gridDims,
   isSplitCell,
   isStampShape,
@@ -102,6 +103,7 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
 
   const dims = useMemo(() => gridDims(data), [data]);
   const totals = useMemo(() => fabricTotals(data), [data]);
+  const finished = useMemo(() => finishedQuiltSize(data), [data]);
   const stamp = isStampShape(data.cellShape);
 
   // ---------------------------------------------------------------------
@@ -413,6 +415,7 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
         ...prev,
         fabrics: prev.fabrics.filter((f) => f.id !== fabricId),
         backgroundFabricId: prev.backgroundFabricId === fabricId ? null : prev.backgroundFabricId,
+        borderFabricId: prev.borderFabricId === fabricId ? null : prev.borderFabricId,
         cells: prev.cells.map((c) => {
           if (c === fabricId) return null;
           if (isSplitCell(c) && c.parts.includes(fabricId)) {
@@ -522,6 +525,34 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
       commitChange((prev) =>
         prev.backgroundFabricId === fabricId ? prev : { ...prev, backgroundFabricId: fabricId },
       );
+    },
+    [commitChange],
+  );
+
+  const applyGridLines = useCallback(
+    (show: boolean) => {
+      commitChange((prev) =>
+        prev.showGridLines === show ? prev : { ...prev, showGridLines: show },
+      );
+    },
+    [commitChange],
+  );
+
+  const applyBorder = useCallback(
+    (fabricId: string | null) => {
+      commitChange((prev) =>
+        prev.borderFabricId === fabricId ? prev : { ...prev, borderFabricId: fabricId },
+      );
+    },
+    [commitChange],
+  );
+
+  const applyBorderWidth = useCallback(
+    (widthIn: number): boolean => {
+      commitChange((prev) =>
+        prev.borderWidthIn === widthIn ? prev : { ...prev, borderWidthIn: widthIn },
+      );
+      return true;
     },
     [commitChange],
   );
@@ -699,7 +730,8 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
               <span aria-hidden="true">{showSettings ? '▾' : '▸'}</span>
             </button>
             <p className="muted small">
-              {dims.finishedWidthIn}&Prime; × {dims.finishedHeightIn}&Prime; ·{' '}
+              {finished.widthIn}&Prime; × {finished.heightIn}&Prime;
+              {data.borderFabricId ? ' with border' : ''} ·{' '}
               {data.cellShape === 'square'
                 ? `${dims.cols} × ${dims.rows} cells`
                 : `${dims.count} pieces`}
@@ -768,6 +800,39 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
                     onCommit={(v) => applyDimensions({ cellHeightIn: v })}
                   />
                 )}
+                <label className="dim-field dim-field-wide check-row">
+                  <span className="check-row-inner">
+                    <input
+                      type="checkbox"
+                      checked={data.showGridLines !== false}
+                      onChange={(e) => applyGridLines(e.target.checked)}
+                    />
+                    Show grid lines
+                  </span>
+                </label>
+                <label className="dim-field dim-field-wide">
+                  Border fabric
+                  <select
+                    value={data.borderFabricId ?? ''}
+                    onChange={(e) => applyBorder(e.target.value || null)}
+                  >
+                    <option value="">— no border —</option>
+                    {data.fabrics.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {data.borderFabricId && (
+                  <DimField
+                    label="Border width (in)"
+                    value={data.borderWidthIn}
+                    min={LIMITS.minBorderIn}
+                    max={LIMITS.maxBorderIn}
+                    onCommit={applyBorderWidth}
+                  />
+                )}
                 <label className="dim-field">
                   Seam allowance
                   <select
@@ -819,7 +884,8 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
       <div className="print-only print-report">
         <h1>{name}</h1>
         <p>
-          Finished size {dims.finishedWidthIn}&Prime; × {dims.finishedHeightIn}&Prime; ·{' '}
+          Finished size {finished.widthIn}&Prime; × {finished.heightIn}&Prime;
+          {data.borderFabricId ? ` (with ${data.borderWidthIn}″ border)` : ''} ·{' '}
           {data.cellShape === 'square'
             ? `${dims.cols} × ${dims.rows} cells of ${data.cellWidthIn}″ × ${data.cellHeightIn}″`
             : `${dims.count} ${data.cellShape} pieces`}
