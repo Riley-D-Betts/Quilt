@@ -166,6 +166,35 @@ export const QuiltSvg = memo(function QuiltSvg({
           />
         ))}
 
+        {/* Locked-cell markers: editor aid only, hidden in thumbnails/print */}
+        {interactive &&
+          (data.locked ?? []).map((i) => {
+            const geom = grid.cells[i];
+            if (!geom) return null;
+            const s = Math.min(geom.cutWIn, geom.cutHIn) * PX_PER_IN;
+            return (
+              <g key={`lock-${i}`} pointerEvents="none">
+                <circle
+                  cx={geom.cx * PX_PER_IN}
+                  cy={geom.cy * PX_PER_IN}
+                  r={s * 0.22}
+                  fill="rgba(255, 253, 248, 0.75)"
+                  stroke="rgba(60, 42, 33, 0.4)"
+                  strokeWidth={0.5}
+                />
+                <text
+                  x={geom.cx * PX_PER_IN}
+                  y={geom.cy * PX_PER_IN}
+                  fontSize={s * 0.26}
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                >
+                  🔒
+                </text>
+              </g>
+            );
+          })}
+
         {borderIn === 0 || gridLines ? (
           <rect
             x={0}

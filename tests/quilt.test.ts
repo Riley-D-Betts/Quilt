@@ -8,6 +8,7 @@ import {
   normalizeQuiltData,
   quiltGrid,
   resizeCells,
+  resizeLockedIndices,
   validateFabricFields,
   validateQuiltData,
   ValidationError,
@@ -36,6 +37,7 @@ function makeQuilt(overrides: Partial<QuiltData> = {}): QuiltData {
     showGridLines: true,
     borderFabricId: null,
     borderWidthIn: 3,
+    locked: [],
     fabrics: [
       { id: 'red', name: 'Red', color: '#aa0000', pattern: 'solid' },
       { id: 'blue', name: 'Blue', color: '#0000aa', pattern: 'dots' },
@@ -553,6 +555,34 @@ describe('validateFabricFields (library fabrics)', () => {
       cells: ['red', null, null, null],
     });
     expect(validateQuiltData(q).fabrics[0].color2).toBe('#ffffff');
+  });
+});
+
+describe('locked cells', () => {
+  it('validates, dedupes, and sorts locked indices', () => {
+    const v = validateQuiltData(makeQuilt({ locked: [3, 1, 1, 0] }));
+    expect(v.locked).toEqual([0, 1, 3]);
+    expect(() => validateQuiltData(makeQuilt({ locked: [4] }))).toThrow(/locked/); // out of range
+    expect(() => validateQuiltData(makeQuilt({ locked: [1.5] }))).toThrow(/locked/);
+    // a non-array is sanitized away by normalization rather than rejected
+    expect(validateQuiltData(makeQuilt({ locked: 'all' as never })).locked).toEqual([]);
+  });
+
+  it('remaps locked indices through a resize like the painting', () => {
+    // 2x3 grid (18x12 quilt, 6" cells): lock cells 0 and 5 (row1,col2)
+    const q = makeQuilt({ widthIn: 18, heightIn: 12, cells: [] });
+    const oldGrid = quiltGrid(q);
+    const newGrid = quiltGrid({ ...q, widthIn: 12, heightIn: 18 }); // 3x2
+    // cell 0 stays cell 0; cell 5 (row 1, col 2) falls outside the 2-col grid
+    expect(resizeLockedIndices([0, 5], oldGrid, newGrid)).toEqual([0]);
+    // cell 4 (row 1, col 1) maps to row 1, col 1 = index 3 in the 2-col grid
+    expect(resizeLockedIndices([4], oldGrid, newGrid)).toEqual([3]);
+  });
+
+  it('older data without locked normalizes to an empty list', () => {
+    const legacy: any = { ...makeQuilt() };
+    delete legacy.locked;
+    expect(normalizeQuiltData(legacy).locked).toEqual([]);
   });
 });
 
