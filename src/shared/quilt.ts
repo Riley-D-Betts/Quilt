@@ -92,6 +92,11 @@ export interface QuiltData {
   borderFabricId: string | null;
   /** Border width in inches (used only when borderFabricId is set). */
   borderWidthIn: number;
+  /**
+   * Indices of locked cells (minesweeper-flag style): painting, erasing,
+   * cutting, and bulk fills leave them untouched until unlocked.
+   */
+  locked: number[];
   fabrics: Fabric[];
   /** Cells in the geometry module's index order (see buildGrid). */
   cells: Cell[];
@@ -170,11 +175,15 @@ export function gridDims(d: QuiltData): GridDims {
  * row by row where the old and new grids overlap. Octagon grids copy their
  * octagon and corner-square sections independently.
  */
-export function resizeCells(oldCells: Cell[], oldGrid: GridGeom, newGrid: GridGeom): Cell[] {
+export function resizeCells<T>(
+  oldCells: (T | null)[],
+  oldGrid: GridGeom,
+  newGrid: GridGeom,
+): (T | null)[] {
   if (oldGrid.shape !== newGrid.shape) {
     return new Array(newGrid.count).fill(null);
   }
-  const next: Cell[] = new Array(newGrid.count).fill(null);
+  const next: (T | null)[] = new Array(newGrid.count).fill(null);
   const copySection = (
     oldLens: number[],
     newLens: number[],
@@ -211,6 +220,21 @@ export function resizeCells(oldCells: Cell[], oldGrid: GridGeom, newGrid: GridGe
     copySection(oldGrid.rowLengths, newGrid.rowLengths, 0, 0);
   }
   return next;
+}
+
+/** Remap locked cell indices through the same overlap copy as the cells. */
+export function resizeLockedIndices(
+  locked: number[],
+  oldGrid: GridGeom,
+  newGrid: GridGeom,
+): number[] {
+  if (locked.length === 0) return locked;
+  const flags: (true | null)[] = new Array(oldGrid.count).fill(null);
+  for (const i of locked) if (i >= 0 && i < oldGrid.count) flags[i] = true;
+  const moved = resizeCells(flags, oldGrid, newGrid);
+  const out: number[] = [];
+  for (let i = 0; i < moved.length; i++) if (moved[i]) out.push(i);
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -472,6 +496,7 @@ export function newQuiltData(): QuiltData {
     showGridLines: true,
     borderFabricId: null,
     borderWidthIn: 3,
+    locked: [],
     fabrics: DEFAULT_PALETTE.map((f, i) => ({ ...f, id: `f${i + 1}` })),
   };
   const dims = gridDims({ ...base, cells: [] });
@@ -499,6 +524,7 @@ export function normalizeQuiltData(raw: any): QuiltData {
       showGridLines: v2.showGridLines !== false,
       borderFabricId: v2.borderFabricId ?? null,
       borderWidthIn: v2.borderWidthIn ?? 3,
+      locked: Array.isArray(v2.locked) ? v2.locked : [],
     };
   }
   return {
@@ -513,6 +539,7 @@ export function normalizeQuiltData(raw: any): QuiltData {
     showGridLines: true,
     borderFabricId: null,
     borderWidthIn: 3,
+    locked: [],
     fabrics: Array.isArray(raw?.fabrics) ? raw.fabrics : [],
     cells: Array.isArray(raw?.cells) ? raw.cells : [],
   };
@@ -593,6 +620,19 @@ export function validateQuiltData(raw: unknown): QuiltData {
       ? 3
       : num(o.borderWidthIn, 'borderWidthIn', LIMITS.minBorderIn, LIMITS.maxBorderIn);
 
+  let locked: number[] = [];
+  if (o.locked !== undefined && o.locked !== null) {
+    if (!Array.isArray(o.locked)) throw new ValidationError('locked must be an array.');
+    const seen = new Set<number>();
+    for (const v of o.locked) {
+      if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v >= grid.count) {
+        throw new ValidationError('locked contains an invalid cell index.');
+      }
+      seen.add(v);
+    }
+    locked = [...seen].sort((a, b) => a - b);
+  }
+
   if (!Array.isArray(o.cells)) throw new ValidationError('cells must be an array.');
   if (o.cells.length !== grid.count) {
     throw new ValidationError(
@@ -642,6 +682,7 @@ export function validateQuiltData(raw: unknown): QuiltData {
     showGridLines,
     borderFabricId,
     borderWidthIn,
+    locked,
     fabrics,
     cells,
   };

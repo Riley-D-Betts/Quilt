@@ -8,6 +8,7 @@ import {
   isStampShape,
   quiltGrid,
   resizeCells,
+  resizeLockedIndices,
   round2,
   LIMITS,
   type Cell,
@@ -28,7 +29,7 @@ import { MyColors } from './MyColors';
 import { processFabricPhoto } from '../photo';
 
 type SaveState = 'saved' | 'dirty' | 'saving' | 'error';
-type Tool = 'paint' | 'erase' | 'cut';
+type Tool = 'paint' | 'erase' | 'cut' | 'lock';
 type CutKind = SplitKind | 'whole';
 
 const UNDO_LIMIT = 100;
@@ -281,6 +282,7 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
     (index: number, part: number | null) => {
       setHistory((h) => {
         const prev = h.data;
+        if (prev.locked.includes(index)) return h; // locked cells stay put
         if (paintValue !== null && !prev.fabrics.some((f) => f.id === paintValue)) return h;
         const cell = prev.cells[index] ?? null;
         let nextCell: Cell;
@@ -309,6 +311,7 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
       setHistory((h) => {
         const prev = h.data;
         if (prev.cellShape !== 'square') return h;
+        if (prev.locked.includes(index)) return h; // locked cells stay put
         const cell = prev.cells[index] ?? null;
         let nextCell: Cell;
         if (cutKind === 'whole') {
@@ -327,24 +330,47 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
     [cutKind],
   );
 
+  /** During a lock stroke, every touched cell gets the FIRST cell's new state. */
+  const lockTarget = useRef<boolean>(true);
+
+  const applyLock = useCallback((index: number) => {
+    const lock = lockTarget.current;
+    setHistory((h) => {
+      const prev = h.data;
+      const isLocked = prev.locked.includes(index);
+      if (isLocked === lock) return h;
+      const locked = lock
+        ? [...prev.locked, index].sort((a, b) => a - b)
+        : prev.locked.filter((i) => i !== index);
+      return { ...h, data: { ...prev, locked } };
+    });
+  }, []);
+
   const handleCellDown = useCallback(
     (index: number, part: number | null) => {
       if (tool === 'paint' && !activeFabricId) return;
       strokeActive.current = true;
       strokeSnapshot.current = latestRef.current.data;
-      if (tool === 'cut') applyCut(index);
-      else applyPaint(index, part);
+      if (tool === 'lock') {
+        lockTarget.current = !latestRef.current.data.locked.includes(index);
+        applyLock(index);
+      } else if (tool === 'cut') {
+        applyCut(index);
+      } else {
+        applyPaint(index, part);
+      }
     },
-    [applyCut, applyPaint, tool, activeFabricId],
+    [applyCut, applyLock, applyPaint, tool, activeFabricId],
   );
 
   const handleCellMove = useCallback(
     (index: number, part: number | null) => {
       if (!strokeActive.current) return;
-      if (tool === 'cut') applyCut(index);
+      if (tool === 'lock') applyLock(index);
+      else if (tool === 'cut') applyCut(index);
       else applyPaint(index, part);
     },
-    [applyCut, applyPaint, tool],
+    [applyCut, applyLock, applyPaint, tool],
   );
 
   const handleStrokeEnd = useCallback(() => {
@@ -440,9 +466,11 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
         (c) => c === null || (isSplitCell(c) && c.parts.some((p) => p === null)),
       );
       if (!hasBlank) return prev;
+      const lockedSet = new Set(prev.locked);
       return {
         ...prev,
-        cells: prev.cells.map((c) => {
+        cells: prev.cells.map((c, i) => {
+          if (lockedSet.has(i)) return c;
           if (c === null) return activeFabricId;
           if (isSplitCell(c) && c.parts.some((p) => p === null)) {
             return { ...c, parts: c.parts.map((p) => p ?? activeFabricId) };
@@ -454,11 +482,19 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
   }, [activeFabricId, commitChange]);
 
   const clearGrid = useCallback(() => {
-    if (!window.confirm('Clear the whole grid, including cuts? (You can undo this.)')) return;
+    if (!window.confirm('Clear the whole grid, including cuts? Locked cells are kept. (You can undo this.)')) {
+      return;
+    }
     commitChange((prev) => {
-      if (!prev.cells.some((c) => c !== null)) return prev;
-      return { ...prev, cells: prev.cells.map(() => null) };
+      const lockedSet = new Set(prev.locked);
+      if (!prev.cells.some((c, i) => c !== null && !lockedSet.has(i))) return prev;
+      return { ...prev, cells: prev.cells.map((c, i) => (lockedSet.has(i) ? c : null)) };
     });
+  }, [commitChange]);
+
+  const unlockAll = useCallback(() => {
+    commitChange((prev) => (prev.locked.length === 0 ? prev : { ...prev, locked: [] }));
+    setTool((t) => (t === 'lock' ? 'paint' : t));
   }, [commitChange]);
 
   const applyDimensions = useCallback(
@@ -484,6 +520,7 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
         const newGrid = quiltGrid(next);
         if (oldGrid.count !== newGrid.count || oldGrid.rows !== newGrid.rows || oldGrid.cols !== newGrid.cols) {
           next.cells = resizeCells(prev.cells, oldGrid, newGrid);
+          next.locked = resizeLockedIndices(prev.locked, oldGrid, newGrid);
         }
         return next;
       });
@@ -515,6 +552,7 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
         ...prev,
         cellShape: shape,
         cells: new Array(count).fill(null),
+        locked: [],
       }));
     },
     [commitChange],
@@ -690,6 +728,20 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
               <button type="button" className="btn" onClick={clearGrid}>
                 Clear grid
               </button>
+              <button
+                type="button"
+                className={`btn ${tool === 'lock' ? 'btn-primary' : ''}`}
+                onClick={() => setTool(tool === 'lock' ? 'paint' : 'lock')}
+                aria-pressed={tool === 'lock'}
+                title="Lock cells so painting can't change them"
+              >
+                🔒 Lock
+              </button>
+              {data.locked.length > 0 && (
+                <button type="button" className="btn" onClick={unlockAll}>
+                  Unlock all ({data.locked.length})
+                </button>
+              )}
             </div>
             {data.cellShape === 'square' && (
               <div className="cut-tools">
@@ -867,7 +919,9 @@ export function Editor({ initialQuilt, onBack }: EditorProps) {
             />
           </div>
           <p className="muted small no-print grid-hint">
-            {tool === 'cut'
+            {tool === 'lock'
+              ? 'Tap or drag over cells to lock or unlock them — locked cells ignore painting.'
+              : tool === 'cut'
               ? cutKind === 'whole'
                 ? 'Tap cells to merge their cuts back into a whole cell.'
                 : 'Tap or drag over cells to cut them. Then pick a fabric and paint each piece.'
